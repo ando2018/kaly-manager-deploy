@@ -1,0 +1,1 @@
+function c(o){let e=document.cookie.match(new RegExp(`(?:^|; )${o}=([^;]*)`));return e?decodeURIComponent(e[1]):null}function i(o,e,n=365){let t=n*24*60*60;document.cookie=`${o}=${encodeURIComponent(e)}; max-age=${t}; path=/; SameSite=Lax`}export{i as n,c as t};

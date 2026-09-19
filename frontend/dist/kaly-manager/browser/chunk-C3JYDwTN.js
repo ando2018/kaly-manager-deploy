@@ -1,0 +1,1 @@
+import{ft as Uv}from"./chunk-Dcai-U2R.js";var o=class r{transform(t){if(!t)return``;let i=typeof t==`string`?new Date(t):t,s=Date.now()-i.getTime(),n=Math.max(0,Math.floor(s/6e4));return n<1?`à l'instant`:n<60?`il y a ${n} min`:`il y a ${Math.floor(n/60)} h ${n%60} min`}static ɵfac=function(i){return new(i||r)};static ɵpipe=Uv({name:`timeAgo`,type:r,pure:!1})};export{o as t};
