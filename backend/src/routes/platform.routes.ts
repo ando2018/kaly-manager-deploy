@@ -214,7 +214,10 @@ platformRouter.get(
   asyncHandler(async (_req, res) => {
     const overview = await Promise.all(
       platform.listEtablissements().map(async (meta) => {
-        const context = await ensureEtablissementContext(meta.id);
+        const context = await ensureEtablissementContext(meta.id).catch((err) => {
+          console.error(`Échec du chargement du contexte pour l'établissement ${meta.id}:`, err);
+          return undefined;
+        });
         return {
           id: meta.id,
           name: meta.name,
