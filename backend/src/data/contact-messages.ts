@@ -13,6 +13,16 @@ export interface ContactMessage {
   etablissementName?: string;
   createdAt: string;
   read: boolean;
+  archived: boolean;
+}
+
+export class ContactMessageError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
 }
 
 export interface CreateContactMessageInput {
@@ -56,11 +66,15 @@ function save(_data: ContactMessagesShape): void {
 
 export const contactMessages = {
   list(): ContactMessage[] {
-    return load().messages.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // Older records predate the `archived` field — default them to false rather than leaving it undefined.
+    return load()
+      .messages.map((m) => ({ ...m, archived: m.archived ?? false }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   },
 
   unreadCount(): number {
-    return load().messages.filter((m) => !m.read).length;
+    // Archiving is how a message gets dealt with — it should stop nagging the "new messages" badge too.
+    return load().messages.filter((m) => !m.read && !m.archived).length;
   },
 
   create(input: CreateContactMessageInput): ContactMessage {
@@ -75,6 +89,7 @@ export const contactMessages = {
       etablissementName: input.etablissementName?.trim() || undefined,
       createdAt: new Date().toISOString(),
       read: false,
+      archived: false,
     };
     data.messages.push(message);
     save(data);
@@ -88,5 +103,26 @@ export const contactMessages = {
     message.read = read;
     save(data);
     return message;
+  },
+
+  setArchived(id: string, archived: boolean): ContactMessage | undefined {
+    const data = load();
+    const message = data.messages.find((m) => m.id === id);
+    if (!message) return undefined;
+    message.archived = archived;
+    save(data);
+    return message;
+  },
+
+  /** Only an already-archived message can be permanently removed — archiving first is the safety net. */
+  remove(id: string): void {
+    const data = load();
+    const message = data.messages.find((m) => m.id === id);
+    if (!message) throw new ContactMessageError('Message introuvable.', 404);
+    if (!message.archived) {
+      throw new ContactMessageError("Le message doit d'abord être archivé avant d'être supprimé.", 400);
+    }
+    data.messages = data.messages.filter((m) => m.id !== id);
+    save(data);
   },
 };

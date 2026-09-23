@@ -105,6 +105,13 @@ function freshSubscription(createdAt: string): SubscriptionState {
   return { trialEndsAt: addDays(new Date(createdAt), TRIAL_DAYS).toISOString(), history: [] };
 }
 
+/** No more free trial — a brand-new établissement is blocked immediately and needs a real token (or an
+ * admin grant) before it can be used. `trialEndsAt` is set to `createdAt` itself so every other piece of
+ * subscription logic (inTrial/active/daysLeft) keeps working unchanged, just with a zero-length window. */
+function blockedSubscription(createdAt: string): SubscriptionState {
+  return { trialEndsAt: createdAt, history: [] };
+}
+
 /** Établissements registered before the subscription system existed have no `subscription` field — grant them a trial computed from their original creation date, same as any new one. */
 function ensureSubscription(meta: EtablissementMeta): SubscriptionState {
   if (!meta.subscription) meta.subscription = freshSubscription(meta.createdAt);
@@ -148,7 +155,7 @@ export const platform = {
       name: name.trim(),
       adminName: adminName.trim(),
       createdAt,
-      subscription: freshSubscription(createdAt),
+      subscription: blockedSubscription(createdAt),
     };
     data.etablissements.push(meta);
     save(data);

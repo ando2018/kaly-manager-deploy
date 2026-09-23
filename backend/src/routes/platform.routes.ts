@@ -4,7 +4,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { config } from '../config';
 import { platform } from '../data/platform';
 import { buildDemoSeed } from '../data/db';
-import { contactMessages } from '../data/contact-messages';
+import { ContactMessageError, contactMessages } from '../data/contact-messages';
 import { ensureEtablissementContext, evictEtablissementContext } from '../data/etablissement-registry';
 import {
   clearFirebaseServiceAccount,
@@ -60,7 +60,8 @@ platformRouter.get('/subscription-plans', (_req, res) => {
   res.json(subscriptions.getPricing());
 });
 
-const PLAN_VALUES: SubscriptionPlan[] = ['WEEK', 'MONTH', 'YEAR'];
+const PLAN_VALUES: SubscriptionPlan[] = ['TWO_DAYS', 'WEEK', 'MONTH', 'YEAR'];
+const PLAN_VALUES_LABEL = "'TWO_DAYS', 'WEEK', 'MONTH' ou 'YEAR'";
 
 /** Public — an établissement's own staff redeem a token here to unlock/extend access, no platform key needed. */
 platformRouter.post('/etablissements/:id/subscription/redeem', (req, res) => {
@@ -163,6 +164,7 @@ platformRouter.delete(
     await clearFirebaseServiceAccount(meta.id);
     fs.rmSync(path.join(ETABLISSEMENTS_DATA_ROOT, meta.id), { recursive: true, force: true });
     fs.rmSync(etablissementUploadsDir(meta.id), { recursive: true, force: true });
+    subscriptions.deleteTokensUsedBy(meta.id);
     platform.remove(meta.id);
 
     res.json({ ok: true });
@@ -335,12 +337,17 @@ platformRouter.patch(
 
 /** Updates the platform-wide pricing shown on the subscription screen (informational — no payment processing yet). */
 platformRouter.put('/subscription-plans', (req, res) => {
-  const { WEEK, MONTH, YEAR } = req.body as { WEEK?: number; MONTH?: number; YEAR?: number };
-  if ([WEEK, MONTH, YEAR].some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
-    res.status(400).json({ error: 'WEEK, MONTH et YEAR (nombres positifs) sont requis.' });
+  const { TWO_DAYS, WEEK, MONTH, YEAR } = req.body as {
+    TWO_DAYS?: number;
+    WEEK?: number;
+    MONTH?: number;
+    YEAR?: number;
+  };
+  if ([TWO_DAYS, WEEK, MONTH, YEAR].some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
+    res.status(400).json({ error: 'TWO_DAYS, WEEK, MONTH et YEAR (nombres positifs) sont requis.' });
     return;
   }
-  res.json(subscriptions.setPricing({ WEEK: WEEK!, MONTH: MONTH!, YEAR: YEAR! }));
+  res.json(subscriptions.setPricing({ TWO_DAYS: TWO_DAYS!, WEEK: WEEK!, MONTH: MONTH!, YEAR: YEAR! }));
 });
 
 platformRouter.get('/subscription-tokens', (_req, res) => {
@@ -351,7 +358,7 @@ platformRouter.get('/subscription-tokens', (_req, res) => {
 platformRouter.post('/subscription-tokens', (req, res) => {
   const { plan, count, paid, note } = req.body as { plan?: SubscriptionPlan; count?: number; paid?: boolean; note?: string };
   if (!plan || !PLAN_VALUES.includes(plan)) {
-    res.status(400).json({ error: "plan doit être 'WEEK', 'MONTH' ou 'YEAR'." });
+    res.status(400).json({ error: `plan doit être ${PLAN_VALUES_LABEL}.` });
     return;
   }
   const n = Number(count ?? 1);
@@ -363,13 +370,14 @@ platformRouter.post('/subscription-tokens', (req, res) => {
   res.status(201).json(created);
 });
 
-/** Pulls an unused token back out of circulation — refused once redeemed. */
+/** Removes a token's record entirely — used or not. Never touches the redeeming établissement's own
+ * subscription access, which was already granted separately (see deleteToken). */
 platformRouter.delete('/subscription-tokens/:code', (req, res) => {
   try {
-    subscriptions.revokeToken(req.params.code);
+    subscriptions.deleteToken(req.params.code);
     res.json({ ok: true });
   } catch (err) {
-    res.status(409).json({ error: err instanceof Error ? err.message : 'Impossible de révoquer ce token.' });
+    res.status(409).json({ error: err instanceof Error ? err.message : 'Impossible de supprimer ce token.' });
   }
 });
 
@@ -397,7 +405,7 @@ platformRouter.post('/etablissements/:id/subscription/grant', (req, res) => {
   } else if (plan && PLAN_VALUES.includes(plan)) {
     grantedDays = PLAN_DAYS[plan];
   } else {
-    res.status(400).json({ error: "Fournissez plan ('WEEK'/'MONTH'/'YEAR') ou days (nombre de jours)." });
+    res.status(400).json({ error: `Fournissez plan (${PLAN_VALUES_LABEL}) ou days (nombre de jours).` });
     return;
   }
   const status = platform.extendSubscription(meta.id, { source: 'ADMIN', days: grantedDays, plan });
@@ -440,4 +448,31 @@ platformRouter.patch('/contact-messages/:id/read', (req, res) => {
     return;
   }
   res.json(updated);
+});
+
+platformRouter.patch('/contact-messages/:id/archive', (req, res) => {
+  const { archived } = req.body as { archived?: boolean };
+  if (typeof archived !== 'boolean') {
+    res.status(400).json({ error: 'archived (boolean) est requis.' });
+    return;
+  }
+  const updated = contactMessages.setArchived(req.params.id, archived);
+  if (!updated) {
+    res.status(404).json({ error: 'Message introuvable.' });
+    return;
+  }
+  res.json(updated);
+});
+
+platformRouter.delete('/contact-messages/:id', (req, res) => {
+  try {
+    contactMessages.remove(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof ContactMessageError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 });

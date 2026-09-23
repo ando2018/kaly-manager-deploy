@@ -61,6 +61,37 @@ export interface MenuItem {
   ingredients: string[];
 }
 
+export type StockActionType =
+  | 'RESTOCK'
+  | 'ADJUST'
+  | 'SET'
+  | 'PRICE_CHANGE'
+  | 'ORDER_DECREMENT'
+  | 'OUT_OF_STOCK'
+  | 'AVAILABILITY';
+
+/**
+ * One entry per stock- or price-affecting action on a menu item. RESTOCK/ADJUST/SET/PRICE_CHANGE
+ * are manual staff actions and always carry a mandatory `comment` (enforced in menu.service.ts);
+ * ORDER_DECREMENT is the automatic deduction from a paid order and carries `orderId` instead.
+ */
+export interface StockHistoryEntry {
+  id: string;
+  menuItemId: string;
+  menuItemName: string;
+  action: StockActionType;
+  quantityBefore?: number;
+  quantityAfter?: number;
+  priceBefore?: number;
+  priceAfter?: number;
+  comment?: string;
+  userId?: string;
+  userName?: string;
+  orderId?: string;
+  orderNumber?: string;
+  at: string;
+}
+
 export interface OrderItem {
   id: string;
   menuItemId: string;
@@ -125,6 +156,13 @@ export interface Order {
 export type EventStatus = 'ACTIVE' | 'CLOSED';
 
 /**
+ * STANDARD: Serveur → Cuisine → Prêt → Servie → Caisse (the normal table-service pipeline).
+ * COUNTER: Caisse → Génération ticket → Récupération comptoir — every order placed under this
+ * évènement skips the kitchen entirely and is ready for pickup immediately (see orders.service.ts submit()).
+ */
+export type EventServiceType = 'STANDARD' | 'COUNTER';
+
+/**
  * An évènement is an isolated operational layer on top of the normal service: it shares the same
  * menu/stock and order pipeline, but any order created under it only appears to the staff assigned
  * to it (Cuisine/Caisse/Comptoir/Suivi Global), separate from normal-service orders and other events.
@@ -134,6 +172,10 @@ export interface RestaurantEvent {
   name: string;
   description?: string;
   status: EventStatus;
+  /** Absent on events created before this field existed — treat as STANDARD. */
+  serviceType?: EventServiceType;
+  /** STANDARD-only: how many tables this évènement seats — drives the table map in Suivi Global. */
+  tableCount?: number;
   createdAt: string;
   createdBy?: string;
   assignedUserIds: string[];
@@ -164,4 +206,5 @@ export interface DbShape {
   counters: Counters;
   theme: ThemeId;
   customTheme?: CustomThemeColors;
+  stockHistory: StockHistoryEntry[];
 }

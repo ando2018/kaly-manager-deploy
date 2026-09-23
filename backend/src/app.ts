@@ -12,6 +12,7 @@ import { platformRouter } from './routes/platform.routes';
 import { settingsRouter } from './routes/settings.routes';
 import { supportRouter } from './routes/support.routes';
 import { eventsRouter } from './routes/events.routes';
+import { publicOrderRouter } from './routes/public-order.routes';
 import { UPLOADS_DISK_PATH, UPLOADS_PUBLIC_PATH } from './middleware/upload.middleware';
 import { resolveEtablissement } from './middleware/etablissement.middleware';
 
@@ -46,6 +47,9 @@ export function createApp() {
   app.use('/api/settings', resolveEtablissement, settingsRouter);
   app.use('/api/support', resolveEtablissement, supportRouter);
   app.use('/api/events', resolveEtablissement, eventsRouter);
+  // No requireAuth: a customer scanning a table's QR code has no staff login — resolveEtablissement
+  // alone still enforces the établissement exists, isn't archived, and its subscription is active.
+  app.use('/api/public-order', resolveEtablissement, publicOrderRouter);
 
   if (hasFrontendBuild) {
     // Any other GET is a client-side route (Angular Router) — let the SPA shell handle it.

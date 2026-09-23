@@ -1,1 +1,0 @@
-import{Hn as ue,Yt as g}from"./chunk-Dcai-U2R.js";var c=180*1e3;function f(t,r=c){let n=g(ue),s=setInterval(()=>{Promise.resolve(t()).catch(()=>{})},r);n.onDestroy(()=>clearInterval(s))}export{f as t};

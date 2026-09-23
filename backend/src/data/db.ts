@@ -30,6 +30,7 @@ export function buildFreshSeed(adminName?: string): DbShape {
     kitchenAlerts: [],
     counters: { table: 0, order: 0 },
     theme: 'emerald',
+    stockHistory: [],
   };
 }
 
@@ -250,6 +251,7 @@ export function buildDemoSeed(): DbShape {
     kitchenAlerts: [],
     counters: { table: 4, order: 88 },
     theme: 'emerald',
+    stockHistory: [],
   };
 }
 
@@ -281,6 +283,11 @@ function migrate(data: DbShape): boolean {
 
   if (!data.events) {
     data.events = [];
+    changed = true;
+  }
+
+  if (!data.stockHistory) {
+    data.stockHistory = [];
     changed = true;
   }
 

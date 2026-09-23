@@ -78,8 +78,35 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
       return db.data.orders.find((o) => o.id === id);
     },
 
+    /**
+     * The still-open TABLE order at this table, if any — a second round joins it instead of opening
+     * a new bill. "Open" means not yet cashed out: `payment` is what actually closes a table's tab,
+     * not `status` (a TABLE order can be paid early and stay SENT/IN_PREPARATION/READY/DELIVERED
+     * until the kitchen catches up — see pay()). Most recent match wins if several linger uncancelled.
+     * Also scoped by évènement — the same table number in normal service vs. under an évènement (or
+     * under two different évènements) are unrelated bills and must never merge into one another.
+     */
+    findActiveTableOrder(tableNumber: number, eventId?: string): Order | undefined {
+      return db.data.orders
+        .filter(
+          (o) =>
+            o.type === 'TABLE' &&
+            o.tableNumber === tableNumber &&
+            o.status !== 'CANCELLED' &&
+            !o.payment &&
+            (eventId ? o.eventId === eventId : !o.eventId),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    },
+
     submit(input: NewOrderInput): Order {
       const order = db.mutate((state) => {
+        // A "Caisse directe" évènement has no kitchen step at all — every order placed under it
+        // skips prep entirely and is ready for pickup the instant it's rung up (see EventServiceType).
+        const event = input.eventId ? state.events.find((e) => e.id === input.eventId) : undefined;
+        const isCounterEvent = event?.serviceType === 'COUNTER';
+        const type = isCounterEvent ? 'EPHEMERAL' : input.type;
+
         const items: OrderItem[] = input.items.map((i) => {
           const menuItem = state.menu.find((m) => m.id === i.menuItemId);
           if (!menuItem) throw new OrderError(`Article introuvable: ${i.menuItemId}`, 400);
@@ -91,20 +118,20 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
             unitPrice: menuItem.price,
             options: i.options,
             kitchenNote: i.kitchenNote,
-            status: 'SENT' as OrderStatus,
+            status: (isCounterEvent ? 'READY' : 'SENT') as OrderStatus,
           };
         });
 
         const totalAmount = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
         const createdAt = new Date().toISOString();
-        const isDraft = input.type === 'EPHEMERAL' && input.draft;
-        const initialStatus: OrderStatus = isDraft ? 'DRAFT' : 'SENT';
+        const isDraft = !isCounterEvent && type === 'EPHEMERAL' && input.draft;
+        const initialStatus: OrderStatus = isCounterEvent ? 'READY' : isDraft ? 'DRAFT' : 'SENT';
         const newOrder: Order = {
           id: generateId('o'),
-          orderNumber: generateOrderNumber(input.type, input.tableNumber),
-          type: input.type,
-          tableNumber: input.tableNumber,
-          guestCount: input.guestCount,
+          orderNumber: generateOrderNumber(type, input.tableNumber),
+          type,
+          tableNumber: isCounterEvent ? undefined : input.tableNumber,
+          guestCount: isCounterEvent ? undefined : input.guestCount,
           customerName: input.customerName,
           status: initialStatus,
           items,
@@ -113,8 +140,17 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
           createdAt,
           waiterId: input.waiterId,
           waiterName: input.waiterName,
-          statusHistory: [{ status: initialStatus, at: createdAt }],
+          // Instant SENT → IN_PREPARATION → READY so the order's timeline/stepper still reads as
+          // having gone through every stage, exactly like the manual fastTrackToReady() shortcut.
+          statusHistory: isCounterEvent
+            ? [
+                { status: 'SENT', at: createdAt },
+                { status: 'IN_PREPARATION', at: createdAt },
+                { status: 'READY', at: createdAt },
+              ]
+            : [{ status: initialStatus, at: createdAt }],
           eventId: input.eventId,
+          isCounterOrder: isCounterEvent || undefined,
         };
 
         if (input.orderNote) {
@@ -131,7 +167,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         return newOrder;
       });
 
-      menuService.decrementForItems(input.items);
+      menuService.decrementForItems(input.items, { id: order.id, orderNumber: order.orderNumber });
       return order;
     },
 
@@ -314,7 +350,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         return target;
       });
 
-      menuService.decrementForItems(items);
+      menuService.decrementForItems(items, { id: order.id, orderNumber: order.orderNumber });
       return order;
     },
 
@@ -343,7 +379,11 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         return { order, item };
       });
 
-      menuService.adjustStock(removed.item.menuItemId, removed.item.quantity);
+      menuService.adjustStock(
+        removed.item.menuItemId,
+        removed.item.quantity,
+        `Article retiré de la commande ${removed.order.orderNumber}`,
+      );
       return removed.order;
     },
 

@@ -50,16 +50,20 @@ menuRouter.post('/', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
 });
 
 menuRouter.put('/:id', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  const { name, category, price, image, description, ingredients } = req.body ?? {};
+  const { name, category, price, image, description, ingredients, comment } = req.body ?? {};
   handle(req, res, () =>
-    req.etablissement!.menu.update(req.params.id, {
-      name,
-      category,
-      price: price === undefined ? undefined : Number(price),
-      image,
-      description,
-      ingredients: Array.isArray(ingredients) ? ingredients.filter(Boolean) : undefined,
-    }),
+    req.etablissement!.menu.update(
+      req.params.id,
+      {
+        name,
+        category,
+        price: price === undefined ? undefined : Number(price),
+        image,
+        description,
+        ingredients: Array.isArray(ingredients) ? ingredients.filter(Boolean) : undefined,
+      },
+      { comment, actor: { userId: req.user!.sub, userName: req.user!.name } },
+    ),
   );
 });
 
@@ -71,21 +75,31 @@ menuRouter.delete('/:id', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
 });
 
 menuRouter.patch('/:id/stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  const { quantity } = req.body as { quantity?: number };
+  const { quantity, comment } = req.body as { quantity?: number; comment?: string };
   if (quantity === undefined) {
     res.status(400).json({ error: 'quantity est requis.' });
     return;
   }
-  handle(req, res, () => req.etablissement!.menu.setStock(req.params.id, Number(quantity)));
+  handle(req, res, () =>
+    req.etablissement!.menu.setStock(req.params.id, Number(quantity), comment, {
+      userId: req.user!.sub,
+      userName: req.user!.name,
+    }),
+  );
 });
 
 menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  const { delta } = req.body as { delta?: number };
+  const { delta, comment } = req.body as { delta?: number; comment?: string };
   if (delta === undefined) {
     res.status(400).json({ error: 'delta est requis.' });
     return;
   }
-  handle(req, res, () => req.etablissement!.menu.adjustStock(req.params.id, Number(delta)));
+  handle(req, res, () =>
+    req.etablissement!.menu.adjustStock(req.params.id, Number(delta), comment, {
+      userId: req.user!.sub,
+      userName: req.user!.name,
+    }),
+  );
 });
 
 menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
@@ -94,14 +108,32 @@ menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, 
     res.status(400).json({ error: 'isAvailable est requis.' });
     return;
   }
-  handle(req, res, () => req.etablissement!.menu.setAvailability(req.params.id, Boolean(isAvailable)));
+  handle(req, res, () =>
+    req.etablissement!.menu.setAvailability(req.params.id, Boolean(isAvailable), {
+      userId: req.user!.sub,
+      userName: req.user!.name,
+    }),
+  );
 });
 
 menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  handle(req, res, () => req.etablissement!.menu.markOutOfStock(req.params.id));
+  handle(req, res, () =>
+    req.etablissement!.menu.markOutOfStock(req.params.id, { userId: req.user!.sub, userName: req.user!.name }),
+  );
 });
 
 menuRouter.patch('/:id/restock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  const { quantity } = req.body as { quantity?: number };
-  handle(req, res, () => req.etablissement!.menu.restock(req.params.id, Number(quantity ?? 20)));
+  const { quantity, comment } = req.body as { quantity?: number; comment?: string };
+  handle(req, res, () =>
+    req.etablissement!.menu.restock(req.params.id, Number(quantity ?? 20), comment, {
+      userId: req.user!.sub,
+      userName: req.user!.name,
+    }),
+  );
+});
+
+/** Full stock/price history, optionally scoped to one item via ?menuItemId=. */
+menuRouter.get('/history', (req, res) => {
+  const menuItemId = typeof req.query.menuItemId === 'string' ? req.query.menuItemId : undefined;
+  res.json(req.etablissement!.menu.listHistory(menuItemId));
 });

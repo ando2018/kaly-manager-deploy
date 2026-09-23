@@ -26,13 +26,26 @@ eventsRouter.get('/', (req, res) => {
   res.json(req.etablissement!.events.list());
 });
 
+function parseServiceType(value: unknown): 'STANDARD' | 'COUNTER' | undefined {
+  return value === 'STANDARD' || value === 'COUNTER' ? value : undefined;
+}
+
+function parseTableCount(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 eventsRouter.post('/', requireRole('ADMIN'), (req, res) => {
-  const { name, description } = req.body ?? {};
+  const { name, description, serviceType, tableCount } = req.body ?? {};
   handle(
     req,
     res,
     () => {
-      const event = req.etablissement!.events.create({ name, description }, req.user!.sub);
+      const event = req.etablissement!.events.create(
+        { name, description, serviceType: parseServiceType(serviceType), tableCount: parseTableCount(tableCount) },
+        req.user!.sub,
+      );
       broadcastEvents(req.etablissementId!);
       return event;
     },
@@ -41,9 +54,14 @@ eventsRouter.post('/', requireRole('ADMIN'), (req, res) => {
 });
 
 eventsRouter.patch('/:id', requireRole('ADMIN'), (req, res) => {
-  const { name, description } = req.body ?? {};
+  const { name, description, serviceType, tableCount } = req.body ?? {};
   handle(req, res, () => {
-    const event = req.etablissement!.events.update(req.params.id, { name, description });
+    const event = req.etablissement!.events.update(req.params.id, {
+      name,
+      description,
+      serviceType: parseServiceType(serviceType),
+      tableCount: parseTableCount(tableCount),
+    });
     broadcastEvents(req.etablissementId!);
     return event;
   });
