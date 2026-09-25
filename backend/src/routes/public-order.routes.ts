@@ -23,9 +23,14 @@ function handle(req: Request, res: Response, fn: () => unknown, status = 200): v
   }
 }
 
-/** Only what a customer needs to build an order — never the full staff catalogue (out-of-stock items excluded). */
+/** Only what a customer needs to build an order — never the full staff catalogue (out-of-stock items excluded).
+ * Lenient about a stale/invalid `event` query param, same as GET /table/:tableNumber — falls back to normal service. */
 publicOrderRouter.get('/menu', (req, res) => {
-  res.json(req.etablissement!.menu.list().filter((m) => m.isAvailable));
+  const ctx = req.etablissement!;
+  const rawEventId = typeof req.query.event === 'string' && req.query.event ? req.query.event : undefined;
+  const event = rawEventId ? ctx.events.get(rawEventId) : undefined;
+  const resolvedEventId = event && event.status === 'ACTIVE' ? event.id : undefined;
+  res.json(ctx.menu.list(resolvedEventId).filter((m) => m.isAvailable));
 });
 
 /**

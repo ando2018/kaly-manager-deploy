@@ -13,7 +13,12 @@ import { settingsRouter } from './routes/settings.routes';
 import { supportRouter } from './routes/support.routes';
 import { eventsRouter } from './routes/events.routes';
 import { publicOrderRouter } from './routes/public-order.routes';
-import { UPLOADS_DISK_PATH, UPLOADS_PUBLIC_PATH } from './middleware/upload.middleware';
+import {
+  IMAGE_LIBRARY_DISK_PATH,
+  IMAGE_LIBRARY_PUBLIC_PATH,
+  UPLOADS_DISK_PATH,
+  UPLOADS_PUBLIC_PATH,
+} from './middleware/upload.middleware';
 import { resolveEtablissement } from './middleware/etablissement.middleware';
 
 // Built Angular app (`npm run build` in frontend/) — served here so the whole app runs on one port.
@@ -28,6 +33,7 @@ export function createApp() {
   app.use(cors({ origin: config.corsOrigin, credentials: true }));
   app.use(express.json());
   app.use(UPLOADS_PUBLIC_PATH, express.static(UPLOADS_DISK_PATH));
+  app.use(IMAGE_LIBRARY_PUBLIC_PATH, express.static(IMAGE_LIBRARY_DISK_PATH));
   if (hasFrontendBuild) {
     app.use(express.static(FRONTEND_DIST));
   }
@@ -53,7 +59,7 @@ export function createApp() {
 
   if (hasFrontendBuild) {
     // Any other GET is a client-side route (Angular Router) — let the SPA shell handle it.
-    app.get(/^\/(?!api\/|uploads\/).*/, (_req, res) => {
+    app.get(/^\/(?!api\/|uploads\/|image-library\/).*/, (_req, res) => {
       res.sendFile(FRONTEND_INDEX);
     });
   }

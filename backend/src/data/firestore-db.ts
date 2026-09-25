@@ -1,5 +1,5 @@
 import { DbShape } from '../models/types';
-import { IEtablissementDatabase } from './db';
+import { IEtablissementDatabase, migrate } from './db';
 import { getFirestoreOrThrow } from './firebase-admin';
 
 const COLLECTION = 'etablissements';
@@ -28,7 +28,10 @@ export class FirestoreDatabase implements IEtablissementDatabase {
     const ref = getFirestoreOrThrow(etablissementId).collection(COLLECTION).doc(etablissementId);
     const snap = await ref.get();
     if (snap.exists) {
-      return new FirestoreDatabase(etablissementId, snap.data() as DbShape);
+      const data = snap.data() as DbShape;
+      // Same backfill JsonDatabase applies on load — Firestore documents can equally predate a field.
+      if (migrate(data)) await ref.set(sanitize(data));
+      return new FirestoreDatabase(etablissementId, data);
     }
     const seed = seedFn();
     await ref.set(sanitize(seed));

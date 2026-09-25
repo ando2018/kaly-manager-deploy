@@ -167,7 +167,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         return newOrder;
       });
 
-      menuService.decrementForItems(input.items, { id: order.id, orderNumber: order.orderNumber });
+      menuService.decrementForItems(input.items, { id: order.id, orderNumber: order.orderNumber }, input.eventId);
       return order;
     },
 
@@ -350,7 +350,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         return target;
       });
 
-      menuService.decrementForItems(items, { id: order.id, orderNumber: order.orderNumber });
+      menuService.decrementForItems(items, { id: order.id, orderNumber: order.orderNumber }, order.eventId);
       return order;
     },
 
@@ -383,6 +383,8 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         removed.item.menuItemId,
         removed.item.quantity,
         `Article retiré de la commande ${removed.order.orderNumber}`,
+        undefined,
+        removed.order.eventId,
       );
       return removed.order;
     },

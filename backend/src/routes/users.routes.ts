@@ -6,6 +6,8 @@ import { broadcastUsers } from '../sockets/io';
 
 export const usersRouter = Router();
 
+// EVENT_MANAGER has the same full account-management access as ADMIN here (requireRole treats them
+// the same) — nothing user-account-specific to restrict further, unlike the évènement-scoped routes.
 usersRouter.use(requireAuth, requireRole('ADMIN'));
 
 usersRouter.get('/', (req, res) => {

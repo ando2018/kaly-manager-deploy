@@ -1,4 +1,6 @@
-export type UserRole = 'WAITER' | 'KITCHEN' | 'CASHIER' | 'ADMIN' | 'COMPTOIR';
+/** EVENT_MANAGER: admin-equivalent powers (orders, stock, team assignment) but only within whichever
+ * évènement(s) they're assigned to — never normal service, never another évènement. */
+export type UserRole = 'WAITER' | 'KITCHEN' | 'CASHIER' | 'ADMIN' | 'COMPTOIR' | 'EVENT_MANAGER';
 
 export type OrderType = 'TABLE' | 'EPHEMERAL';
 
@@ -89,6 +91,8 @@ export interface StockHistoryEntry {
   userName?: string;
   orderId?: string;
   orderNumber?: string;
+  /** Absent = normal service. Which évènement's stock this particular entry actually changed. */
+  eventId?: string;
   at: string;
 }
 
@@ -196,6 +200,13 @@ export interface Counters {
   order: number;
 }
 
+/** One évènement's independent stock for one menu item — the catalogue entry itself (name/price/
+ * category/…) always stays shared across the whole établissement; only these two fields can diverge. */
+export interface EventStockEntry {
+  stockQuantity: number;
+  isAvailable: boolean;
+}
+
 export interface DbShape {
   users: User[];
   menu: MenuItem[];
@@ -206,5 +217,11 @@ export interface DbShape {
   counters: Counters;
   theme: ThemeId;
   customTheme?: CustomThemeColors;
+  /** The organization's own logo — shown in the sidebar brand mark in place of the default "KM" mark. */
+  logoUrl?: string;
   stockHistory: StockHistoryEntry[];
+  /** eventId -> menuItemId -> that évènement's own stock override. Absent entries fall back to the
+   * menu item's own stockQuantity/isAvailable (normal service's values, and the "inherit" default
+   * an évènement starts from the first time its stock is actually touched). */
+  eventStock: Record<string, Record<string, EventStockEntry>>;
 }

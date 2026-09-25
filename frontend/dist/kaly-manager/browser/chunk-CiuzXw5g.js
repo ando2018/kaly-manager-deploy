@@ -1,1 +1,0 @@
-var e={WAITER:`Serveur`,KITCHEN:`Cuisine`,CASHIER:`Caisse`,ADMIN:`Direction`,COMPTOIR:`Comptoir`};var t={ENTREE:`Entrées`,MAIN:`Plats`,DESSERT:`Desserts`,DRINK:`Boissons`,AUTRES:`Autres`};var r={DRAFT:`Brouillon`,SENT:`Envoyée`,IN_PREPARATION:`En préparation`,READY:`Prêt`,DELIVERED:`Servie`,PAID:`Payée`,CANCELLED:`Annulée`};export{r as n,t as r,e as t};

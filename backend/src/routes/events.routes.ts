@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
+import { requireOwnEventForManager } from '../middleware/event.middleware';
 import { requireRole } from '../middleware/role.middleware';
 import { EventError } from '../services/events.service';
 import { broadcastEvents } from '../sockets/io';
@@ -21,9 +22,16 @@ function handle(req: Request, res: Response, fn: () => unknown, status = 200): v
   }
 }
 
-// Open to any authenticated role — every staff member needs this list to choose their évènement after login.
+// Open to any authenticated role — every staff member needs this list to choose their évènement after
+// login. EVENT_MANAGER is the one exception with narrower vision: filtered down to their own évènement(s)
+// — the single restriction their otherwise ADMIN-equivalent access carries (see requireRole).
 eventsRouter.get('/', (req, res) => {
-  res.json(req.etablissement!.events.list());
+  const events = req.etablissement!.events.list();
+  if (req.user?.role === 'EVENT_MANAGER') {
+    res.json(events.filter((e) => e.assignedUserIds.includes(req.user!.sub)));
+    return;
+  }
+  res.json(events);
 });
 
 function parseServiceType(value: unknown): 'STANDARD' | 'COUNTER' | undefined {
@@ -46,14 +54,19 @@ eventsRouter.post('/', requireRole('ADMIN'), (req, res) => {
         { name, description, serviceType: parseServiceType(serviceType), tableCount: parseTableCount(tableCount) },
         req.user!.sub,
       );
+      // An EVENT_MANAGER only ever sees/acts on évènements they're assigned to — auto-assign the
+      // creator, otherwise they'd create it and immediately lose access to what they just made.
+      if (req.user!.role === 'EVENT_MANAGER') {
+        req.etablissement!.events.addMember(event.id, req.user!.sub);
+      }
       broadcastEvents(req.etablissementId!);
-      return event;
+      return req.etablissement!.events.get(event.id);
     },
     201,
   );
 });
 
-eventsRouter.patch('/:id', requireRole('ADMIN'), (req, res) => {
+eventsRouter.patch('/:id', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   const { name, description, serviceType, tableCount } = req.body ?? {};
   handle(req, res, () => {
     const event = req.etablissement!.events.update(req.params.id, {
@@ -67,7 +80,7 @@ eventsRouter.patch('/:id', requireRole('ADMIN'), (req, res) => {
   });
 });
 
-eventsRouter.patch('/:id/status', requireRole('ADMIN'), (req, res) => {
+eventsRouter.patch('/:id/status', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   const { status } = req.body as { status?: string };
   if (status !== 'ACTIVE' && status !== 'CLOSED') {
     res.status(400).json({ error: 'status doit être ACTIVE ou CLOSED.' });
@@ -80,7 +93,7 @@ eventsRouter.patch('/:id/status', requireRole('ADMIN'), (req, res) => {
   });
 });
 
-eventsRouter.post('/:id/members', requireRole('ADMIN'), (req, res) => {
+eventsRouter.post('/:id/members', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   const { userId } = req.body as { userId?: string };
   if (!userId) {
     res.status(400).json({ error: 'userId est requis.' });
@@ -93,7 +106,7 @@ eventsRouter.post('/:id/members', requireRole('ADMIN'), (req, res) => {
   });
 });
 
-eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), (req, res) => {
+eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   handle(req, res, () => {
     const event = req.etablissement!.events.removeMember(req.params.id, req.params.userId);
     broadcastEvents(req.etablissementId!);
@@ -101,7 +114,7 @@ eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), (req, res) => 
   });
 });
 
-eventsRouter.delete('/:id', requireRole('ADMIN'), (req, res) => {
+eventsRouter.delete('/:id', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   handle(req, res, () => {
     req.etablissement!.events.remove(req.params.id);
     broadcastEvents(req.etablissementId!);

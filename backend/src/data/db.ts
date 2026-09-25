@@ -31,6 +31,7 @@ export function buildFreshSeed(adminName?: string): DbShape {
     counters: { table: 0, order: 0 },
     theme: 'emerald',
     stockHistory: [],
+    eventStock: {},
   };
 }
 
@@ -252,11 +253,12 @@ export function buildDemoSeed(): DbShape {
     counters: { table: 4, order: 88 },
     theme: 'emerald',
     stockHistory: [],
+    eventStock: {},
   };
 }
 
 /** Backfills statusHistory on orders persisted before that field existed. */
-function migrate(data: DbShape): boolean {
+export function migrate(data: DbShape): boolean {
   let changed = false;
   for (const order of data.orders as (Order & { statusHistory?: Order['statusHistory'] })[]) {
     if (order.statusHistory?.length) continue;
@@ -288,6 +290,11 @@ function migrate(data: DbShape): boolean {
 
   if (!data.stockHistory) {
     data.stockHistory = [];
+    changed = true;
+  }
+
+  if (!data.eventStock) {
+    data.eventStock = {};
     changed = true;
   }
 

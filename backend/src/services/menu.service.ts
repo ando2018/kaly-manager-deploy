@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { IEtablissementDatabase } from '../data/db';
-import { DbShape, MenuCategory, MenuItem, StockActionType, StockHistoryEntry } from '../models/types';
+import { DbShape, EventStockEntry, MenuCategory, MenuItem, StockActionType, StockHistoryEntry } from '../models/types';
 import { generateId } from '../utils/id';
 import { UPLOADS_PUBLIC_PATH, etablissementUploadsDir } from '../middleware/upload.middleware';
 
@@ -77,11 +77,38 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
     });
   }
 
+  /** Pure read — safe to call outside db.mutate(). Normal service (no eventId) always reads the item's
+   * own fields; an évènement with no override yet also reads those, since it hasn't diverged. */
+  function readEffectiveStock(state: DbShape, item: MenuItem, eventId?: string): EventStockEntry {
+    if (!eventId) return { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
+    return state.eventStock[eventId]?.[item.id] ?? { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
+  }
+
+  /** Only call from inside db.mutate(). Writes to the item itself for normal service, or to its
+   * per-évènement override (auto-created on first touch) otherwise — the catalogue entry (name/price/
+   * category/…) is never touched either way, only these two fields. */
+  function writeStock(state: DbShape, item: MenuItem, eventId: string | undefined, next: EventStockEntry): void {
+    if (!eventId) {
+      item.stockQuantity = next.stockQuantity;
+      item.isAvailable = next.isAvailable;
+      return;
+    }
+    const perEvent = state.eventStock[eventId] ?? (state.eventStock[eventId] = {});
+    perEvent[item.id] = next;
+  }
+
+  /** The item as it should be reported to the caller — its catalogue fields plus whichever stock actually applies. */
+  function withEffectiveStock(item: MenuItem, eff: EventStockEntry): MenuItem {
+    return eff.stockQuantity === item.stockQuantity && eff.isAvailable === item.isAvailable ? item : { ...item, ...eff };
+  }
+
   return {
     MenuError,
 
-    list(): MenuItem[] {
-      return db.data.menu;
+    /** The shared catalogue, with each item's stock/availability resolved for the given évènement
+     * (or normal service's own values when eventId is absent). */
+    list(eventId?: string): MenuItem[] {
+      return db.data.menu.map((item) => withEffectiveStock(item, readEffectiveStock(db.data, item, eventId)));
     },
 
     create(input: CreateMenuItemInput): MenuItem {
@@ -150,108 +177,124 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
         if (!item) throw new MenuError('Article introuvable.', 404);
         removedImage = item.image;
         state.menu = state.menu.filter((m) => m.id !== id);
+        for (const perEvent of Object.values(state.eventStock)) delete perEvent[id];
       });
       deleteUploadedImageIfLocal(removedImage);
     },
 
     /** Direct override of the stock count — always requires `comment`. */
-    setStock(id: string, quantity: number, comment: string | undefined, actor?: StockActor): MenuItem {
+    setStock(id: string, quantity: number, comment: string | undefined, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = item.stockQuantity;
-        item.stockQuantity = Math.max(0, quantity);
-        item.isAvailable = item.stockQuantity > 0;
+        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const quantityAfter = Math.max(0, quantity);
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+        writeStock(state, item, eventId, next);
         recordHistory(state, item, 'SET', {
           quantityBefore,
-          quantityAfter: item.stockQuantity,
+          quantityAfter,
           comment,
           userId: actor?.userId,
           userName: actor?.userName,
+          eventId,
         });
-        return item;
+        return withEffectiveStock(item, next);
       });
     },
 
     /** The +/- quick-adjust buttons — always requires `comment`. */
-    adjustStock(id: string, delta: number, comment: string | undefined, actor?: StockActor): MenuItem {
+    adjustStock(id: string, delta: number, comment: string | undefined, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = item.stockQuantity;
-        item.stockQuantity = Math.max(0, item.stockQuantity + delta);
-        item.isAvailable = item.stockQuantity > 0;
+        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const quantityAfter = Math.max(0, quantityBefore + delta);
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+        writeStock(state, item, eventId, next);
         recordHistory(state, item, 'ADJUST', {
           quantityBefore,
-          quantityAfter: item.stockQuantity,
+          quantityAfter,
           comment,
           userId: actor?.userId,
           userName: actor?.userName,
+          eventId,
         });
-        return item;
+        return withEffectiveStock(item, next);
       });
     },
 
-    setAvailability(id: string, isAvailable: boolean, actor?: StockActor): MenuItem {
+    setAvailability(id: string, isAvailable: boolean, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        item.isAvailable = isAvailable;
-        recordHistory(state, item, 'AVAILABILITY', { userId: actor?.userId, userName: actor?.userName });
-        return item;
+        const quantity = readEffectiveStock(state, item, eventId).stockQuantity;
+        const next: EventStockEntry = { stockQuantity: quantity, isAvailable };
+        writeStock(state, item, eventId, next);
+        recordHistory(state, item, 'AVAILABILITY', { userId: actor?.userId, userName: actor?.userName, eventId });
+        return withEffectiveStock(item, next);
       });
     },
 
-    markOutOfStock(id: string, actor?: StockActor): MenuItem {
+    markOutOfStock(id: string, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = item.stockQuantity;
-        item.isAvailable = false;
-        item.stockQuantity = 0;
+        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const next: EventStockEntry = { stockQuantity: 0, isAvailable: false };
+        writeStock(state, item, eventId, next);
         recordHistory(state, item, 'OUT_OF_STOCK', {
           quantityBefore,
           quantityAfter: 0,
           userId: actor?.userId,
           userName: actor?.userName,
+          eventId,
         });
-        return item;
+        return withEffectiveStock(item, next);
       });
     },
 
     /** Réapprovisionnement — always requires `comment`. */
-    restock(id: string, quantity: number, comment: string | undefined, actor?: StockActor): MenuItem {
+    restock(id: string, quantity: number, comment: string | undefined, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = item.stockQuantity;
-        item.isAvailable = true;
-        item.stockQuantity = Math.max(0, quantity);
+        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const quantityAfter = Math.max(0, quantity);
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: true };
+        writeStock(state, item, eventId, next);
         recordHistory(state, item, 'RESTOCK', {
           quantityBefore,
-          quantityAfter: item.stockQuantity,
+          quantityAfter,
           comment,
           userId: actor?.userId,
           userName: actor?.userName,
+          eventId,
         });
-        return item;
+        return withEffectiveStock(item, next);
       });
     },
 
     /** Automatic deduction on order submission — no comment, references the order instead. */
-    decrementForItems(items: { menuItemId: string; quantity: number }[], order?: { id: string; orderNumber: string }): void {
+    decrementForItems(
+      items: { menuItemId: string; quantity: number }[],
+      order?: { id: string; orderNumber: string },
+      eventId?: string,
+    ): void {
       db.mutate((state) => {
         for (const m of state.menu) {
           const totalQty = items.filter((i) => i.menuItemId === m.id).reduce((sum, i) => sum + i.quantity, 0);
           if (totalQty === 0) continue;
-          const quantityBefore = m.stockQuantity;
-          m.stockQuantity = Math.max(0, m.stockQuantity - totalQty);
-          m.isAvailable = m.stockQuantity > 0;
+          const quantityBefore = readEffectiveStock(state, m, eventId).stockQuantity;
+          const quantityAfter = Math.max(0, quantityBefore - totalQty);
+          const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+          writeStock(state, m, eventId, next);
           recordHistory(state, m, 'ORDER_DECREMENT', {
             quantityBefore,
-            quantityAfter: m.stockQuantity,
+            quantityAfter,
             orderId: order?.id,
             orderNumber: order?.orderNumber,
+            eventId,
           });
         }
       });

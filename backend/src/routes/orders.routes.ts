@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
+import { enforceEventManagerScope, resolveEventContext } from '../middleware/event.middleware';
 import { requireRole } from '../middleware/role.middleware';
 import { OrderError } from '../services/orders.service';
 import { broadcastAlerts, broadcastMenu, broadcastOrders } from '../sockets/io';
@@ -7,6 +8,8 @@ import { broadcastAlerts, broadcastMenu, broadcastOrders } from '../sockets/io';
 export const ordersRouter = Router();
 
 ordersRouter.use(requireAuth);
+ordersRouter.use(resolveEventContext);
+ordersRouter.use(enforceEventManagerScope);
 
 function handle(req: Request, res: Response, fn: () => unknown, status = 200): void {
   try {
@@ -206,7 +209,7 @@ ordersRouter.post('/:id/messages', requireRole('WAITER', 'KITCHEN'), (req, res) 
     return;
   }
   const senderRole =
-    req.user!.role === 'ADMIN'
+    req.user!.role === 'ADMIN' || req.user!.role === 'EVENT_MANAGER'
       ? (requestedRole ?? 'WAITER')
       : req.user!.role === 'KITCHEN'
         ? 'KITCHEN'

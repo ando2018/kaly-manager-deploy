@@ -1,12 +1,18 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
+import { enforceEventManagerScope, resolveEventContext } from '../middleware/event.middleware';
 import { requireRole } from '../middleware/role.middleware';
+import { searchImageLibrary } from '../middleware/upload.middleware';
 import { MenuError } from '../services/menu.service';
 import { broadcastMenu } from '../sockets/io';
 
 export const menuRouter = Router();
 
 menuRouter.use(requireAuth);
+menuRouter.use(resolveEventContext);
+// EVENT_MANAGER gets full ADMIN-equivalent access below (requireRole treats them the same) — this is
+// the one thing that survives that: reject an X-Event-Id scoped to an évènement they aren't assigned to.
+menuRouter.use(enforceEventManagerScope);
 
 function handle(req: Request, res: Response, fn: () => unknown, status = 200): void {
   try {
@@ -23,7 +29,7 @@ function handle(req: Request, res: Response, fn: () => unknown, status = 200): v
 }
 
 menuRouter.get('/', (req, res) => {
-  res.json(req.etablissement!.menu.list());
+  res.json(req.etablissement!.menu.list(req.eventId));
 });
 
 menuRouter.post('/', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
@@ -81,10 +87,13 @@ menuRouter.patch('/:id/stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) =>
     return;
   }
   handle(req, res, () =>
-    req.etablissement!.menu.setStock(req.params.id, Number(quantity), comment, {
-      userId: req.user!.sub,
-      userName: req.user!.name,
-    }),
+    req.etablissement!.menu.setStock(
+      req.params.id,
+      Number(quantity),
+      comment,
+      { userId: req.user!.sub, userName: req.user!.name },
+      req.eventId,
+    ),
   );
 });
 
@@ -95,10 +104,13 @@ menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), (req, res) =
     return;
   }
   handle(req, res, () =>
-    req.etablissement!.menu.adjustStock(req.params.id, Number(delta), comment, {
-      userId: req.user!.sub,
-      userName: req.user!.name,
-    }),
+    req.etablissement!.menu.adjustStock(
+      req.params.id,
+      Number(delta),
+      comment,
+      { userId: req.user!.sub, userName: req.user!.name },
+      req.eventId,
+    ),
   );
 });
 
@@ -109,26 +121,35 @@ menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, 
     return;
   }
   handle(req, res, () =>
-    req.etablissement!.menu.setAvailability(req.params.id, Boolean(isAvailable), {
-      userId: req.user!.sub,
-      userName: req.user!.name,
-    }),
+    req.etablissement!.menu.setAvailability(
+      req.params.id,
+      Boolean(isAvailable),
+      { userId: req.user!.sub, userName: req.user!.name },
+      req.eventId,
+    ),
   );
 });
 
 menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
   handle(req, res, () =>
-    req.etablissement!.menu.markOutOfStock(req.params.id, { userId: req.user!.sub, userName: req.user!.name }),
+    req.etablissement!.menu.markOutOfStock(
+      req.params.id,
+      { userId: req.user!.sub, userName: req.user!.name },
+      req.eventId,
+    ),
   );
 });
 
 menuRouter.patch('/:id/restock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
   const { quantity, comment } = req.body as { quantity?: number; comment?: string };
   handle(req, res, () =>
-    req.etablissement!.menu.restock(req.params.id, Number(quantity ?? 20), comment, {
-      userId: req.user!.sub,
-      userName: req.user!.name,
-    }),
+    req.etablissement!.menu.restock(
+      req.params.id,
+      Number(quantity ?? 20),
+      comment,
+      { userId: req.user!.sub, userName: req.user!.name },
+      req.eventId,
+    ),
   );
 });
 
@@ -136,4 +157,11 @@ menuRouter.patch('/:id/restock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) 
 menuRouter.get('/history', (req, res) => {
   const menuItemId = typeof req.query.menuItemId === 'string' ? req.query.menuItemId : undefined;
   res.json(req.etablissement!.menu.listHistory(menuItemId));
+});
+
+/** Shared stock-photo library, searched live by filename — ?q=<texte tapé>. Not tied to any one
+ * établissement: an operator grows it by dropping files straight into the server's image-library folder. */
+menuRouter.get('/image-library', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  res.json(searchImageLibrary(q));
 });

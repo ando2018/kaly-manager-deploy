@@ -8,7 +8,10 @@ export function requireRole(...roles: UserRole[]) {
       res.status(401).json({ error: 'Authentification requise.' });
       return;
     }
-    if (role === 'ADMIN' || roles.includes(role)) {
+    // EVENT_MANAGER has full ADMIN-equivalent functionality everywhere — the one restriction (can't
+    // touch an évènement they aren't assigned to) is enforced separately, by enforceEventManagerScope
+    // (X-Event-Id-scoped routes) and requireOwnEventForManager (évènement :id routes), not here.
+    if (role === 'ADMIN' || role === 'EVENT_MANAGER' || roles.includes(role)) {
       next();
       return;
     }

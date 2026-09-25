@@ -77,3 +77,7 @@ export function broadcastEvents(etablissementId: string): void {
 export function broadcastTheme(etablissementId: string, theme: string, customTheme?: unknown): void {
   io?.to(etablissementId).emit('state:theme', { theme, customTheme });
 }
+
+export function broadcastLogo(etablissementId: string, logoUrl: string | undefined): void {
+  io?.to(etablissementId).emit('state:logo', { logoUrl });
+}
