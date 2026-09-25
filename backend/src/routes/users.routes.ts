@@ -6,9 +6,19 @@ import { broadcastUsers } from '../sockets/io';
 
 export const usersRouter = Router();
 
-// EVENT_MANAGER has the same full account-management access as ADMIN here (requireRole treats them
-// the same) — nothing user-account-specific to restrict further, unlike the évènement-scoped routes.
+// EVENT_MANAGER shares ADMIN's account-management access (requireRole treats them the same), except
+// on Direction accounts: those stay untouchable from an event manager's space.
 usersRouter.use(requireAuth, requireRole('ADMIN'));
+
+usersRouter.param('id', (req, res, next, id: string) => {
+  if (req.user?.role !== 'EVENT_MANAGER') return next();
+  const target = req.etablissement!.users.list().find((u) => u.id === id);
+  if (target?.role === 'ADMIN') {
+    res.status(403).json({ error: "Un responsable d'évènement ne peut pas modifier un compte Direction." });
+    return;
+  }
+  next();
+});
 
 usersRouter.get('/', (req, res) => {
   res.json(req.etablissement!.users.list());
@@ -19,6 +29,10 @@ usersRouter.post('/', (req, res) => {
     const { name, role, pinCode, mustChangePin } = req.body as { name?: string; role?: string; pinCode?: string; mustChangePin?: boolean };
     if (!name || !role || !pinCode || mustChangePin === undefined) {
       res.status(400).json({ error: 'name, role, pinCode et mustChangePin sont requis.' });
+      return;
+    }
+    if (role === 'ADMIN' && req.user!.role === 'EVENT_MANAGER') {
+      res.status(403).json({ error: "Un responsable d'évènement ne peut pas créer un compte Direction." });
       return;
     }
     const user = req.etablissement!.users.create({ name, role: role as any, pinCode, mustChangePin });
@@ -36,6 +50,10 @@ usersRouter.post('/', (req, res) => {
 usersRouter.put('/:id', (req, res) => {
   try {
     const { name, role } = req.body as { name?: string; role?: string };
+    if (role === 'ADMIN' && req.user!.role === 'EVENT_MANAGER') {
+      res.status(403).json({ error: "Un responsable d'évènement ne peut pas attribuer le rôle Direction." });
+      return;
+    }
     const user = req.etablissement!.users.update(req.params.id, { name, role: role as any });
     broadcastUsers(req.etablissementId!);
     res.json(user);

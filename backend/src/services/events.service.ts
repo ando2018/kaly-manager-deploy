@@ -32,16 +32,23 @@ export class EventError extends Error {
   }
 }
 
+/** The évènement as exposed to clients — its per-item stock is internal (served through the menu instead). */
+function toPublic(event: RestaurantEvent): RestaurantEvent {
+  const { eventStock: _stock, ...rest } = event;
+  return rest;
+}
+
 export function createEventsService(db: IEtablissementDatabase) {
   return {
     EventError,
 
     list(): RestaurantEvent[] {
-      return db.data.events;
+      return db.data.events.map(toPublic);
     },
 
     get(id: string): RestaurantEvent | undefined {
-      return db.data.events.find((e) => e.id === id);
+      const event = db.data.events.find((e) => e.id === id);
+      return event && toPublic(event);
     },
 
     create(input: NewEventInput, createdBy?: string): RestaurantEvent {
@@ -63,7 +70,7 @@ export function createEventsService(db: IEtablissementDatabase) {
 
       return db.mutate((state) => {
         state.events.push(event);
-        return event;
+        return toPublic(event);
       });
     },
 
@@ -89,7 +96,7 @@ export function createEventsService(db: IEtablissementDatabase) {
         if (event.serviceType === 'COUNTER') {
           event.tableCount = undefined;
         }
-        return event;
+        return toPublic(event);
       });
     },
 
@@ -98,7 +105,7 @@ export function createEventsService(db: IEtablissementDatabase) {
         const event = state.events.find((e) => e.id === id);
         if (!event) throw new EventError('Évènement introuvable.', 404);
         event.status = status;
-        return event;
+        return toPublic(event);
       });
     },
 
@@ -111,7 +118,7 @@ export function createEventsService(db: IEtablissementDatabase) {
         if (!event.assignedUserIds.includes(userId)) {
           event.assignedUserIds.push(userId);
         }
-        return event;
+        return toPublic(event);
       });
     },
 
@@ -120,7 +127,7 @@ export function createEventsService(db: IEtablissementDatabase) {
         const event = state.events.find((e) => e.id === id);
         if (!event) throw new EventError('Évènement introuvable.', 404);
         event.assignedUserIds = event.assignedUserIds.filter((uid) => uid !== userId);
-        return event;
+        return toPublic(event);
       });
     },
 

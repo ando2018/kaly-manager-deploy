@@ -80,8 +80,9 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
   /** Pure read — safe to call outside db.mutate(). Normal service (no eventId) always reads the item's
    * own fields; an évènement with no override yet also reads those, since it hasn't diverged. */
   function readEffectiveStock(state: DbShape, item: MenuItem, eventId?: string): EventStockEntry {
-    if (!eventId) return { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
-    return state.eventStock[eventId]?.[item.id] ?? { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
+    const inherited = { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
+    if (!eventId) return inherited;
+    return state.events.find((e) => e.id === eventId)?.eventStock?.[item.id] ?? inherited;
   }
 
   /** Only call from inside db.mutate(). Writes to the item itself for normal service, or to its
@@ -93,8 +94,9 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       item.isAvailable = next.isAvailable;
       return;
     }
-    const perEvent = state.eventStock[eventId] ?? (state.eventStock[eventId] = {});
-    perEvent[item.id] = next;
+    const event = state.events.find((e) => e.id === eventId);
+    if (!event) throw new MenuError('Évènement introuvable.', 404);
+    (event.eventStock ??= {})[item.id] = next;
   }
 
   /** The item as it should be reported to the caller — its catalogue fields plus whichever stock actually applies. */
@@ -177,7 +179,7 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
         if (!item) throw new MenuError('Article introuvable.', 404);
         removedImage = item.image;
         state.menu = state.menu.filter((m) => m.id !== id);
-        for (const perEvent of Object.values(state.eventStock)) delete perEvent[id];
+        for (const event of state.events) delete event.eventStock?.[id];
       });
       deleteUploadedImageIfLocal(removedImage);
     },

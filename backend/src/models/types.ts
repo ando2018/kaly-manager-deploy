@@ -183,6 +183,10 @@ export interface RestaurantEvent {
   createdAt: string;
   createdBy?: string;
   assignedUserIds: string[];
+  /** menuItemId -> this évènement's own stock. The product list itself is shared by the whole
+   * établissement; an item with no entry here inherits the menu item's own stockQuantity/isAvailable
+   * (normal service's values) until this évènement's stock is first touched. Never sent to clients. */
+  eventStock?: Record<string, EventStockEntry>;
 }
 
 export interface WaiterAlert {
@@ -220,8 +224,9 @@ export interface DbShape {
   /** The organization's own logo — shown in the sidebar brand mark in place of the default "KM" mark. */
   logoUrl?: string;
   stockHistory: StockHistoryEntry[];
-  /** eventId -> menuItemId -> that évènement's own stock override. Absent entries fall back to the
-   * menu item's own stockQuantity/isAvailable (normal service's values, and the "inherit" default
-   * an évènement starts from the first time its stock is actually touched). */
-  eventStock: Record<string, Record<string, EventStockEntry>>;
+}
+
+/** Pre-migration shape: per-évènement stock used to live at the root, keyed by eventId. */
+export interface LegacyDbShape extends DbShape {
+  eventStock?: Record<string, Record<string, EventStockEntry>>;
 }

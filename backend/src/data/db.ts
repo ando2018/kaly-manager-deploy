@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
-import { Counters, DbShape, MenuItem, Order, User } from '../models/types';
+import { Counters, DbShape, LegacyDbShape, MenuItem, Order, User } from '../models/types';
 import { generateId } from '../utils/id';
 import { UPLOADS_PUBLIC_PATH } from '../middleware/upload.middleware';
 
@@ -31,7 +31,6 @@ export function buildFreshSeed(adminName?: string): DbShape {
     counters: { table: 0, order: 0 },
     theme: 'emerald',
     stockHistory: [],
-    eventStock: {},
   };
 }
 
@@ -253,7 +252,6 @@ export function buildDemoSeed(): DbShape {
     counters: { table: 4, order: 88 },
     theme: 'emerald',
     stockHistory: [],
-    eventStock: {},
   };
 }
 
@@ -293,8 +291,15 @@ export function migrate(data: DbShape): boolean {
     changed = true;
   }
 
-  if (!data.eventStock) {
-    data.eventStock = {};
+  // Per-évènement stock moved from the root (eventId -> menuItemId -> entry) into each évènement.
+  // Entries for évènements that no longer exist are dropped rather than carried over.
+  const legacy = data as LegacyDbShape;
+  if (legacy.eventStock) {
+    for (const [eventId, perItem] of Object.entries(legacy.eventStock)) {
+      const event = data.events.find((e) => e.id === eventId);
+      if (event && Object.keys(perItem).length) event.eventStock = { ...perItem, ...event.eventStock };
+    }
+    delete legacy.eventStock;
     changed = true;
   }
 
