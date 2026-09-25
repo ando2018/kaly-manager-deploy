@@ -31,6 +31,7 @@ export function buildFreshSeed(adminName?: string): DbShape {
     counters: { table: 0, order: 0 },
     theme: 'emerald',
     stockHistory: [],
+    availabilityDecoupled: true,
   };
 }
 
@@ -252,6 +253,7 @@ export function buildDemoSeed(): DbShape {
     counters: { table: 4, order: 88 },
     theme: 'emerald',
     stockHistory: [],
+    availabilityDecoupled: true,
   };
 }
 
@@ -300,6 +302,20 @@ export function migrate(data: DbShape): boolean {
       if (event && Object.keys(perItem).length) event.eventStock = { ...perItem, ...event.eventStock };
     }
     delete legacy.eventStock;
+    changed = true;
+  }
+
+  // "Disponible à la vente" used to be switched off automatically whenever stock reached 0. It is now a
+  // purely manual choice (unchecked = hidden from order taking) and a sold-out item stays listed, greyed
+  // out. Items that were only unchecked by that old automatic rule are re-checked, once, so they show as
+  // "Rupture" instead of vanishing from the order screens.
+  if (!data.availabilityDecoupled) {
+    const recheck = (s: { stockQuantity: number; isAvailable: boolean }) => {
+      if (!s.isAvailable && s.stockQuantity <= 0) s.isAvailable = true;
+    };
+    data.menu.forEach(recheck);
+    for (const event of data.events) Object.values(event.eventStock ?? {}).forEach(recheck);
+    data.availabilityDecoupled = true;
     changed = true;
   }
 

@@ -224,6 +224,8 @@ export interface DbShape {
   /** The organization's own logo — shown in the sidebar brand mark in place of the default "KM" mark. */
   logoUrl?: string;
   stockHistory: StockHistoryEntry[];
+  /** Set once "Disponible à la vente" stopped being auto-unchecked by stock hitting 0 (see migrate()). */
+  availabilityDecoupled?: boolean;
 }
 
 /** Pre-migration shape: per-évènement stock used to live at the root, keyed by eventId. */

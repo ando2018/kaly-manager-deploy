@@ -1,5 +1,5 @@
 import { IEtablissementDatabase } from '../data/db';
-import { KitchenMessage, Order, OrderItem, OrderStatus, OrderType, PaymentMethod, WaiterAlert } from '../models/types';
+import { DbShape, KitchenMessage, MenuItem, Order, OrderItem, OrderStatus, OrderType, PaymentMethod, WaiterAlert } from '../models/types';
 import { generateId } from '../utils/id';
 import { MenuService } from './menu.service';
 
@@ -23,6 +23,15 @@ export interface NewOrderInput {
   draft?: boolean;
   /** Set when the submitting staff member is currently working under an évènement. */
   eventId?: string;
+}
+
+/** Refuses an item that isn't offered for sale (unchecked "Disponible à la vente") or is sold out,
+ * using the évènement's own stock when the order belongs to one. */
+function assertOrderable(state: DbShape, menuItem: MenuItem, eventId: string | undefined): void {
+  const own = eventId ? state.events.find((e) => e.id === eventId)?.eventStock?.[menuItem.id] : undefined;
+  const stock = own ?? menuItem;
+  if (!stock.isAvailable) throw new OrderError(`« ${menuItem.name} » n'est pas proposé à la vente.`, 400);
+  if (stock.stockQuantity <= 0) throw new OrderError(`« ${menuItem.name} » est en rupture de stock.`, 400);
 }
 
 export class OrderError extends Error {
@@ -110,6 +119,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         const items: OrderItem[] = input.items.map((i) => {
           const menuItem = state.menu.find((m) => m.id === i.menuItemId);
           if (!menuItem) throw new OrderError(`Article introuvable: ${i.menuItemId}`, 400);
+          assertOrderable(state, menuItem, input.eventId);
           return {
             id: generateId('i'),
             menuItemId: i.menuItemId,
@@ -327,6 +337,7 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         const newItems: OrderItem[] = items.map((i) => {
           const menuItem = state.menu.find((m) => m.id === i.menuItemId);
           if (!menuItem) throw new OrderError(`Article introuvable: ${i.menuItemId}`, 400);
+          assertOrderable(state, menuItem, target.eventId);
           return {
             id: generateId('i'),
             menuItemId: i.menuItemId,

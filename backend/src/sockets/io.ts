@@ -19,7 +19,14 @@ export function initSockets(httpServer: HttpServer): SocketIOServer {
 
   io.on('connection', async (socket) => {
     const etablissementId = etablissementIdFromSocket(socket);
-    const context = etablissementId ? await ensureEtablissementContext(etablissementId) : undefined;
+    // A rejection here would be unhandled (async event listener) and take the whole server down —
+    // e.g. one établissement set to Firestore without its service-account key.
+    const context = etablissementId
+      ? await ensureEtablissementContext(etablissementId).catch((err) => {
+          console.error(`Socket refusé pour l'établissement ${etablissementId} :`, err instanceof Error ? err.message : err);
+          return undefined;
+        })
+      : undefined;
     if (!context || socket.disconnected) {
       socket.disconnect(true);
       return;

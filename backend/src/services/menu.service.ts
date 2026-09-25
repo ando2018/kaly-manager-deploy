@@ -124,7 +124,7 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
         category: input.category,
         price: input.price,
         stockQuantity: Math.max(0, input.stockQuantity),
-        isAvailable: input.stockQuantity > 0,
+        isAvailable: true,
         image: input.image ?? '',
         description: input.description ?? '',
         ingredients: input.ingredients ?? [],
@@ -189,9 +189,10 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const current = readEffectiveStock(state, item, eventId);
+        const quantityBefore = current.stockQuantity;
         const quantityAfter = Math.max(0, quantity);
-        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: current.isAvailable };
         writeStock(state, item, eventId, next);
         recordHistory(state, item, 'SET', {
           quantityBefore,
@@ -210,9 +211,10 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const current = readEffectiveStock(state, item, eventId);
+        const quantityBefore = current.stockQuantity;
         const quantityAfter = Math.max(0, quantityBefore + delta);
-        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: current.isAvailable };
         writeStock(state, item, eventId, next);
         recordHistory(state, item, 'ADJUST', {
           quantityBefore,
@@ -242,8 +244,9 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
-        const next: EventStockEntry = { stockQuantity: 0, isAvailable: false };
+        const current = readEffectiveStock(state, item, eventId);
+        const quantityBefore = current.stockQuantity;
+        const next: EventStockEntry = { stockQuantity: 0, isAvailable: current.isAvailable };
         writeStock(state, item, eventId, next);
         recordHistory(state, item, 'OUT_OF_STOCK', {
           quantityBefore,
@@ -261,9 +264,10 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
-        const quantityBefore = readEffectiveStock(state, item, eventId).stockQuantity;
+        const current = readEffectiveStock(state, item, eventId);
+        const quantityBefore = current.stockQuantity;
         const quantityAfter = Math.max(0, quantity);
-        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: true };
+        const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: current.isAvailable };
         writeStock(state, item, eventId, next);
         recordHistory(state, item, 'RESTOCK', {
           quantityBefore,
@@ -287,9 +291,10 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
         for (const m of state.menu) {
           const totalQty = items.filter((i) => i.menuItemId === m.id).reduce((sum, i) => sum + i.quantity, 0);
           if (totalQty === 0) continue;
-          const quantityBefore = readEffectiveStock(state, m, eventId).stockQuantity;
+          const current = readEffectiveStock(state, m, eventId);
+          const quantityBefore = current.stockQuantity;
           const quantityAfter = Math.max(0, quantityBefore - totalQty);
-          const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: quantityAfter > 0 };
+          const next: EventStockEntry = { stockQuantity: quantityAfter, isAvailable: current.isAvailable };
           writeStock(state, m, eventId, next);
           recordHistory(state, m, 'ORDER_DECREMENT', {
             quantityBefore,

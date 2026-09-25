@@ -22,7 +22,16 @@ export const resolveEtablissement = asyncHandler(async (req: Request, res: Respo
     return;
   }
 
-  const context = await ensureEtablissementContext(raw);
+  let context: EtablissementContext | undefined;
+  try {
+    context = await ensureEtablissementContext(raw);
+  } catch (err) {
+    console.error(`Chargement impossible de l'établissement ${raw} :`, err instanceof Error ? err.message : err);
+    res.status(503).json({
+      error: `Les données de cet établissement sont indisponibles (${err instanceof Error ? err.message.replace(/\.$/, '') : 'erreur de stockage'}). Contactez l'administrateur de la plateforme.`,
+    });
+    return;
+  }
   if (!context) {
     res.status(404).json({ error: "Identifiant d'établissement inconnu." });
     return;
