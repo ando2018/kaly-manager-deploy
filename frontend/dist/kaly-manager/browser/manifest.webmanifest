@@ -9,6 +9,9 @@
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
   "lang": "fr",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "icons": [
     {
       "src": "icon-192.png",

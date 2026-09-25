@@ -1,0 +1,1 @@
+import{Gt as g,Lt as de}from"./chunk-B9AQiMvq.js";var c=180*1e3;function f(t,r=c){let n=g(de),s=setInterval(()=>{Promise.resolve(t()).catch(()=>{})},r);n.onDestroy(()=>clearInterval(s))}export{f as t};
