@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { NextFunction, Request, Response, Router } from 'express';
+import multer from 'multer';
+import { isMailConfigured, isSmtpConfigured, notifyNewContactMessage, sendMail } from '../services/mail.service';
 import { config } from '../config';
 import { platform } from '../data/platform';
 import { buildDemoSeed } from '../data/db';
@@ -109,24 +111,136 @@ platformRouter.post('/contact', (req, res) => {
     return;
   }
   const created = contactMessages.create({ name, email, phone, message, etablissementIdAttempt });
+  notifyNewContactMessage(created);
   res.status(201).json(created);
 });
 
 platformRouter.use(requirePlatformKey);
+
+/** Whether outgoing notification e-mails are set up (SMTP_HOST + NOTIFY_EMAIL in backend/.env). */
+platformRouter.get('/mail/status', (_req, res) => {
+  res.json({ configured: isMailConfigured(), host: config.smtp.host ?? null, to: config.notifyEmail ?? null });
+});
+
+/** Sends a test e-mail to NOTIFY_EMAIL so the SMTP settings can be checked from /ap. */
+platformRouter.post(
+  '/mail/test',
+  asyncHandler(async (_req, res) => {
+    if (!isMailConfigured()) {
+      res.status(400).json({ error: 'SMTP non configuré : renseignez SMTP_HOST et NOTIFY_EMAIL dans backend/.env puis redémarrez le serveur.' });
+      return;
+    }
+    try {
+      await sendMail(
+        config.notifyEmail!,
+        '[Kaly Manager] E-mail de test',
+        "Si vous lisez ce message, l'envoi d'e-mails de Kaly Manager fonctionne.",
+      );
+      res.json({ ok: true, to: config.notifyEmail });
+    } catch (err) {
+      res.status(502).json({ error: `Échec de l'envoi : ${err instanceof Error ? err.message : err}` });
+    }
+  }),
+);
 
 platformRouter.get('/etablissements', (_req, res) => {
   res.json(platform.listEtablissements());
 });
 
 platformRouter.post('/etablissements', (req, res) => {
-  const { name, adminName } = req.body as { name?: string; adminName?: string };
+  const { name, adminName, adminEmail } = req.body as { name?: string; adminName?: string; adminEmail?: string };
   if (!name?.trim() || !adminName?.trim()) {
     res.status(400).json({ error: "name et adminName sont requis." });
     return;
   }
-  const meta = platform.createEtablissement(name, adminName);
+  if (adminEmail?.trim() && !EMAIL_RE.test(adminEmail.trim())) {
+    res.status(400).json({ error: "Adresse e-mail de l'administrateur invalide." });
+    return;
+  }
+  const meta = platform.createEtablissement(name, adminName, adminEmail);
   res.status(201).json(meta);
 });
+
+/** Sets (or clears, with an empty value) the e-mail used to write to this établissement's admin. */
+platformRouter.patch('/etablissements/:id/admin-email', (req, res) => {
+  const { adminEmail } = req.body as { adminEmail?: string };
+  if (adminEmail?.trim() && !EMAIL_RE.test(adminEmail.trim())) {
+    res.status(400).json({ error: 'Adresse e-mail invalide.' });
+    return;
+  }
+  if (!platform.findEtablissement(req.params.id)) {
+    res.status(404).json({ error: "Identifiant d'établissement inconnu." });
+    return;
+  }
+  res.json(platform.setAdminEmail(req.params.id, adminEmail));
+});
+
+// The guide PDF is built in the browser (it embeds the app's own screenshots), then handed over here
+// only to be mailed — kept in memory, never written to disk.
+const guideUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, file.mimetype === 'application/pdf'),
+});
+
+/** Manually e-mails the user guide (PDF attached) to the établissement's admin address. */
+platformRouter.post(
+  '/etablissements/:id/send-guide',
+  guideUpload.single('guide'),
+  asyncHandler(async (req, res) => {
+    const meta = platform.findEtablissement(req.params.id);
+    if (!meta) {
+      res.status(404).json({ error: "Identifiant d'établissement inconnu." });
+      return;
+    }
+    if (!meta.adminEmail) {
+      res.status(400).json({ error: "Aucune adresse e-mail n'est renseignée pour l'administrateur de cet établissement." });
+      return;
+    }
+    if (!isSmtpConfigured()) {
+      res.status(400).json({ error: "L'envoi d'e-mails n'est pas configuré (SMTP dans backend/.env)." });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: 'Guide PDF manquant.' });
+      return;
+    }
+    const link = `${req.protocol}://${req.get('host')}/etablissement/${meta.id}`;
+    const text = [
+      `Bonjour${meta.adminName ? ` ${meta.adminName}` : ''},`,
+      '',
+      `Votre établissement « ${meta.name} » est prêt sur Kaly Manager.`,
+      '',
+      `Identifiant de l'établissement : ${meta.id}`,
+      `Connexion directe : ${link}`,
+      '',
+      "Vous trouverez en pièce jointe le manuel d'utilisation : premiers pas, création de votre premier service,",
+      "ajout de votre logo, gestion de l'équipe, des évènements, du stock, des commandes et de la caisse.",
+      '',
+      'Pour toute question, répondez simplement à cet e-mail.',
+      '',
+      "L'équipe Kaly Manager",
+    ].join('\n');
+    try {
+      await sendMail(
+        meta.adminEmail,
+        `Kaly Manager — Guide d'utilisation de ${meta.name}`,
+        text,
+        config.notifyEmail?.split(',')[0]?.trim() || undefined,
+        [
+          {
+            filename: req.file.originalname || `Manuel-KalyManager-${meta.id}.pdf`,
+            content: req.file.buffer,
+            contentType: 'application/pdf',
+          },
+        ],
+      );
+      res.json({ ok: true, to: meta.adminEmail });
+    } catch (err) {
+      res.status(502).json({ error: `Échec de l'envoi : ${err instanceof Error ? err.message : err}` });
+    }
+  }),
+);
 
 /**
  * Creates a permanent, non-deletable établissement pre-seeded with a demo menu and one user per
@@ -224,6 +338,7 @@ platformRouter.get(
           id: meta.id,
           name: meta.name,
           adminName: meta.adminName ?? null,
+          adminEmail: meta.adminEmail ?? null,
           archived: meta.archived ?? false,
           protected: meta.protected ?? false,
           createdAt: meta.createdAt,

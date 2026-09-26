@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { notifyNewContactMessage } from '../services/mail.service';
 import { requireAuth } from '../middleware/auth.middleware';
 import { contactMessages } from '../data/contact-messages';
 import { platform } from '../data/platform';
@@ -33,5 +34,6 @@ supportRouter.post('/', (req, res) => {
     etablissementIdAttempt: req.etablissementId,
     etablissementName: meta?.name,
   });
+  notifyNewContactMessage(created);
   res.status(201).json(created);
 });

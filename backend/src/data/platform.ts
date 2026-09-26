@@ -39,6 +39,8 @@ export interface EtablissementMeta {
   id: string;
   name: string;
   adminName?: string;
+  /** Where the platform writes to this établissement's admin (e.g. the user guide). */
+  adminEmail?: string;
   createdAt: string;
   archived?: boolean;
   archivedAt?: string;
@@ -146,7 +148,7 @@ export const platform = {
     return load().etablissements.find((r) => r.id === normalized);
   },
 
-  createEtablissement(name: string, adminName: string): EtablissementMeta {
+  createEtablissement(name: string, adminName: string, adminEmail?: string): EtablissementMeta {
     const data = load();
     const id = generateEtablissementId(new Set(data.etablissements.map((r) => r.id)));
     const createdAt = new Date().toISOString();
@@ -154,6 +156,7 @@ export const platform = {
       id,
       name: name.trim(),
       adminName: adminName.trim(),
+      adminEmail: adminEmail?.trim() || undefined,
       createdAt,
       subscription: blockedSubscription(createdAt),
     };
@@ -191,6 +194,18 @@ export const platform = {
     const createdAt = new Date().toISOString();
     const meta: EtablissementMeta = { id, name, createdAt, subscription: freshSubscription(createdAt) };
     data.etablissements.push(meta);
+    save(data);
+    return meta;
+  },
+
+  setAdminEmail(id: string, adminEmail: string | undefined): EtablissementMeta {
+    const data = load();
+    const normalized = id.trim().toUpperCase();
+    const meta = data.etablissements.find((r) => r.id === normalized);
+    if (!meta) {
+      throw new Error(`Établissement not found: ${id}`);
+    }
+    meta.adminEmail = adminEmail?.trim() || undefined;
     save(data);
     return meta;
   },
