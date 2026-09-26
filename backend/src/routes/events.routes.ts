@@ -108,6 +108,10 @@ eventsRouter.post('/:id/members', requireRole('ADMIN'), requireOwnEventForManage
 });
 
 eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
+  if (req.params.userId === req.user!.sub) {
+    res.status(403).json({ error: 'Vous ne pouvez pas retirer votre propre affectation à un évènement.' });
+    return;
+  }
   const target = req.etablissement!.users.list().find((u) => u.id === req.params.userId);
   if (target?.role === 'ADMIN' && req.user!.role !== 'ADMIN') {
     res.status(403).json({ error: "Seule la direction peut retirer un compte Direction d'un évènement." });
