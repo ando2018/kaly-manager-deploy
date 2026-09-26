@@ -1,7 +1,7 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { enforceEventManagerScope, resolveEventContext } from '../middleware/event.middleware';
-import { requireRole } from '../middleware/role.middleware';
+import { requireAdminOnly, requireRole } from '../middleware/role.middleware';
 import { searchImageLibrary } from '../middleware/upload.middleware';
 import { MenuError } from '../services/menu.service';
 import { broadcastMenu } from '../sockets/io';
@@ -32,7 +32,7 @@ menuRouter.get('/', (req, res) => {
   res.json(req.etablissement!.menu.list(req.eventId));
 });
 
-menuRouter.post('/', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.post('/', requireAdminOnly, (req, res) => {
   const { name, category, price, stockQuantity, image, description, ingredients } = req.body ?? {};
   if (!name || !category || price === undefined || stockQuantity === undefined) {
     res.status(400).json({ error: 'name, category, price et stockQuantity sont requis.' });
@@ -57,6 +57,11 @@ menuRouter.post('/', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
 
 menuRouter.put('/:id', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
   const { name, category, price, image, description, ingredients, comment } = req.body ?? {};
+  const current = req.etablissement!.db.data.menu.find((m) => m.id === req.params.id);
+  if (price !== undefined && current && Number(price) !== current.price && req.user!.role !== 'ADMIN') {
+    res.status(403).json({ error: "Seule la direction peut modifier le prix d'un produit." });
+    return;
+  }
   handle(req, res, () =>
     req.etablissement!.menu.update(
       req.params.id,
@@ -73,7 +78,7 @@ menuRouter.put('/:id', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
   );
 });
 
-menuRouter.delete('/:id', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.delete('/:id', requireAdminOnly, (req, res) => {
   handle(req, res, () => {
     req.etablissement!.menu.remove(req.params.id);
     return { ok: true };
@@ -115,7 +120,7 @@ menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), (req, res) =
 });
 
 menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
-  const { isAvailable } = req.body as { isAvailable?: boolean };
+  const { isAvailable, comment } = req.body as { isAvailable?: boolean; comment?: string };
   if (isAvailable === undefined) {
     res.status(400).json({ error: 'isAvailable est requis.' });
     return;
@@ -124,6 +129,7 @@ menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, 
     req.etablissement!.menu.setAvailability(
       req.params.id,
       Boolean(isAvailable),
+      comment,
       { userId: req.user!.sub, userName: req.user!.name },
       req.eventId,
     ),
@@ -131,9 +137,11 @@ menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, 
 });
 
 menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+  const { comment } = req.body as { comment?: string };
   handle(req, res, () =>
     req.etablissement!.menu.markOutOfStock(
       req.params.id,
+      comment,
       { userId: req.user!.sub, userName: req.user!.name },
       req.eventId,
     ),

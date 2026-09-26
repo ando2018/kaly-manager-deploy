@@ -70,6 +70,10 @@ export type StockActionType =
   | 'PRICE_CHANGE'
   | 'ORDER_DECREMENT'
   | 'OUT_OF_STOCK'
+  /** "Disponible à la vente" checked / unchecked. */
+  | 'PUT_ON_SALE'
+  | 'REMOVED_FROM_SALE'
+  /** Legacy: an availability change recorded before its direction was stored. */
   | 'AVAILABILITY';
 
 /**

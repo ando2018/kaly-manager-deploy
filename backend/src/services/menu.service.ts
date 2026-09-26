@@ -39,7 +39,7 @@ export interface StockActor {
   userName?: string;
 }
 
-const MANDATORY_COMMENT_ACTIONS: ReadonlySet<StockActionType> = new Set(['RESTOCK', 'ADJUST', 'SET', 'PRICE_CHANGE']);
+const MANDATORY_COMMENT_ACTIONS: ReadonlySet<StockActionType> = new Set(['RESTOCK', 'ADJUST', 'SET', 'PRICE_CHANGE', 'OUT_OF_STOCK', 'PUT_ON_SALE', 'REMOVED_FROM_SALE']);
 
 export function createMenuService(db: IEtablissementDatabase, etablissementId: string) {
   /** Best-effort delete of a previously-uploaded image file; no-op for external URLs (seed images, etc.). */
@@ -228,19 +228,21 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
       });
     },
 
-    setAvailability(id: string, isAvailable: boolean, actor?: StockActor, eventId?: string): MenuItem {
+    /** "Disponible à la vente" on/off — always requires `comment`. */
+    setAvailability(id: string, isAvailable: boolean, comment: string | undefined, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
         const quantity = readEffectiveStock(state, item, eventId).stockQuantity;
         const next: EventStockEntry = { stockQuantity: quantity, isAvailable };
         writeStock(state, item, eventId, next);
-        recordHistory(state, item, 'AVAILABILITY', { userId: actor?.userId, userName: actor?.userName, eventId });
+        recordHistory(state, item, isAvailable ? 'PUT_ON_SALE' : 'REMOVED_FROM_SALE', { comment, userId: actor?.userId, userName: actor?.userName, eventId });
         return withEffectiveStock(item, next);
       });
     },
 
-    markOutOfStock(id: string, actor?: StockActor, eventId?: string): MenuItem {
+    /** Passage en rupture — always requires `comment`. */
+    markOutOfStock(id: string, comment: string | undefined, actor?: StockActor, eventId?: string): MenuItem {
       return db.mutate((state) => {
         const item = state.menu.find((m) => m.id === id);
         if (!item) throw new MenuError('Article introuvable.', 404);
@@ -251,6 +253,7 @@ export function createMenuService(db: IEtablissementDatabase, etablissementId: s
         recordHistory(state, item, 'OUT_OF_STOCK', {
           quantityBefore,
           quantityAfter: 0,
+          comment,
           userId: actor?.userId,
           userName: actor?.userName,
           eventId,

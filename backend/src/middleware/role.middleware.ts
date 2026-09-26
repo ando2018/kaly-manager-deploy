@@ -18,3 +18,16 @@ export function requireRole(...roles: UserRole[]) {
     res.status(403).json({ error: "Accès refusé pour votre rôle." });
   };
 }
+
+/** Direction only — unlike requireRole(), an EVENT_MANAGER does NOT get through. */
+export function requireAdminOnly(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user?.role) {
+    res.status(401).json({ error: 'Authentification requise.' });
+    return;
+  }
+  if (req.user.role !== 'ADMIN') {
+    res.status(403).json({ error: 'Action réservée à la direction.' });
+    return;
+  }
+  next();
+}

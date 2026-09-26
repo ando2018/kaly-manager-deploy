@@ -86,8 +86,9 @@ export function createEventsService(db: IEtablissementDatabase) {
         if (input.description !== undefined) {
           event.description = input.description.trim() || undefined;
         }
-        if (input.serviceType !== undefined) {
-          event.serviceType = input.serviceType;
+        // The service type is fixed at creation: its orders, stock and team were set up for that flow.
+        if (input.serviceType !== undefined && input.serviceType !== (event.serviceType ?? 'STANDARD')) {
+          throw new EventError("Le type de service d'un évènement ne peut plus être modifié après sa création.", 400);
         }
         if (input.tableCount !== undefined) {
           event.tableCount = normalizeTableCount(input.tableCount);

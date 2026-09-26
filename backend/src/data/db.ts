@@ -319,6 +319,16 @@ export function migrate(data: DbShape): boolean {
     changed = true;
   }
 
+  // Availability history entries briefly stored their direction in an `isAvailable` field under a single
+  // AVAILABILITY action; they now use two distinct actions. Entries without that field stay AVAILABILITY.
+  for (const entry of data.stockHistory) {
+    const legacy = entry as typeof entry & { isAvailable?: boolean };
+    if (legacy.action !== 'AVAILABILITY' || typeof legacy.isAvailable !== 'boolean') continue;
+    legacy.action = legacy.isAvailable ? 'PUT_ON_SALE' : 'REMOVED_FROM_SALE';
+    delete legacy.isAvailable;
+    changed = true;
+  }
+
   // Uploaded-image URLs used to freeze whatever host/port served the upload request (e.g.
   // "http://192.168.1.198:3000/uploads/..."), which breaks the moment the server is reached from
   // a different host. Strip that prefix down to the relative path the frontend now expects.
