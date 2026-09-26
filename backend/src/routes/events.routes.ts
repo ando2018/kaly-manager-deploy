@@ -1,7 +1,7 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import { requireOwnEventForManager } from '../middleware/event.middleware';
-import { requireRole } from '../middleware/role.middleware';
+import { requireAdminOnly, requireRole } from '../middleware/role.middleware';
 import { EventError } from '../services/events.service';
 import { broadcastEvents } from '../sockets/io';
 
@@ -44,7 +44,8 @@ function parseTableCount(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-eventsRouter.post('/', requireRole('ADMIN'), (req, res) => {
+// Creating and deleting évènements is reserved to the Direction — an EVENT_MANAGER only runs their own.
+eventsRouter.post('/', requireAdminOnly, (req, res) => {
   const { name, description, serviceType, tableCount } = req.body ?? {};
   handle(
     req,
@@ -107,6 +108,11 @@ eventsRouter.post('/:id/members', requireRole('ADMIN'), requireOwnEventForManage
 });
 
 eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
+  const target = req.etablissement!.users.list().find((u) => u.id === req.params.userId);
+  if (target?.role === 'ADMIN' && req.user!.role !== 'ADMIN') {
+    res.status(403).json({ error: "Seule la direction peut retirer un compte Direction d'un évènement." });
+    return;
+  }
   handle(req, res, () => {
     const event = req.etablissement!.events.removeMember(req.params.id, req.params.userId);
     broadcastEvents(req.etablissementId!);
@@ -114,7 +120,7 @@ eventsRouter.delete('/:id/members/:userId', requireRole('ADMIN'), requireOwnEven
   });
 });
 
-eventsRouter.delete('/:id', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
+eventsRouter.delete('/:id', requireAdminOnly, (req, res) => {
   handle(req, res, () => {
     req.etablissement!.events.remove(req.params.id);
     broadcastEvents(req.etablissementId!);
