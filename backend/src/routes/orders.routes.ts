@@ -1,6 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
-import { enforceEventManagerScope, resolveEventContext } from '../middleware/event.middleware';
+import { enforceEventManagerScope, rejectIfEventClosed, resolveEventContext } from '../middleware/event.middleware';
 import { requireRole } from '../middleware/role.middleware';
 import { OrderError } from '../services/orders.service';
 import { broadcastAlerts, broadcastMenu, broadcastOrders } from '../sockets/io';
@@ -37,7 +37,7 @@ ordersRouter.get('/:id', (req, res) => {
   res.json(order);
 });
 
-ordersRouter.post('/', requireRole('WAITER'), (req, res) => {
+ordersRouter.post('/', requireRole('WAITER'), rejectIfEventClosed, (req, res) => {
   const { type, tableNumber, guestCount, customerName, items, orderNote, draft, eventId } = req.body ?? {};
   if (!type || !Array.isArray(items) || items.length === 0) {
     res.status(400).json({ error: 'type et items (non vide) sont requis.' });
@@ -67,7 +67,7 @@ ordersRouter.post('/', requireRole('WAITER'), (req, res) => {
   );
 });
 
-ordersRouter.post('/:id/items', requireRole('WAITER'), (req, res) => {
+ordersRouter.post('/:id/items', requireRole('WAITER'), rejectIfEventClosed, (req, res) => {
   const { items } = req.body as { items?: unknown };
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ error: 'items (non vide) est requis.' });

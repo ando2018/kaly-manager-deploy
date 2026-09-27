@@ -1,6 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
-import { enforceEventManagerScope, resolveEventContext } from '../middleware/event.middleware';
+import { enforceEventManagerScope, rejectIfEventClosed, resolveEventContext } from '../middleware/event.middleware';
 import { requireAdminOnly, requireRole } from '../middleware/role.middleware';
 import { searchImageLibrary } from '../middleware/upload.middleware';
 import { MenuError } from '../services/menu.service';
@@ -85,7 +85,7 @@ menuRouter.delete('/:id', requireAdminOnly, (req, res) => {
   });
 });
 
-menuRouter.patch('/:id/stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.patch('/:id/stock', requireRole('KITCHEN', 'COMPTOIR'), rejectIfEventClosed, (req, res) => {
   const { quantity, comment } = req.body as { quantity?: number; comment?: string };
   if (quantity === undefined) {
     res.status(400).json({ error: 'quantity est requis.' });
@@ -102,7 +102,7 @@ menuRouter.patch('/:id/stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) =>
   );
 });
 
-menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), rejectIfEventClosed, (req, res) => {
   const { delta, comment } = req.body as { delta?: number; comment?: string };
   if (delta === undefined) {
     res.status(400).json({ error: 'delta est requis.' });
@@ -119,7 +119,7 @@ menuRouter.patch('/:id/adjust', requireRole('KITCHEN', 'COMPTOIR'), (req, res) =
   );
 });
 
-menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), rejectIfEventClosed, (req, res) => {
   const { isAvailable, comment } = req.body as { isAvailable?: boolean; comment?: string };
   if (isAvailable === undefined) {
     res.status(400).json({ error: 'isAvailable est requis.' });
@@ -136,7 +136,7 @@ menuRouter.patch('/:id/availability', requireRole('KITCHEN', 'COMPTOIR'), (req, 
   );
 });
 
-menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), rejectIfEventClosed, (req, res) => {
   const { comment } = req.body as { comment?: string };
   handle(req, res, () =>
     req.etablissement!.menu.markOutOfStock(
@@ -148,7 +148,7 @@ menuRouter.patch('/:id/out-of-stock', requireRole('KITCHEN', 'COMPTOIR'), (req, 
   );
 });
 
-menuRouter.patch('/:id/restock', requireRole('KITCHEN', 'COMPTOIR'), (req, res) => {
+menuRouter.patch('/:id/restock', requireRole('KITCHEN', 'COMPTOIR'), rejectIfEventClosed, (req, res) => {
   const { quantity, comment } = req.body as { quantity?: number; comment?: string };
   handle(req, res, () =>
     req.etablissement!.menu.restock(

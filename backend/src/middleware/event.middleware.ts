@@ -5,21 +5,42 @@ declare global {
   namespace Express {
     interface Request {
       eventId?: string;
+      /** The évènement in X-Event-Id is clôturé: readable (suivi, stats), but nothing new can be recorded. */
+      eventClosed?: boolean;
     }
   }
 }
 
 const HEADER = 'x-event-id';
 
-/** Requires resolveEtablissement to have run first. Lenient: an unknown/inactive event id is simply
- * ignored (falls back to normal service) rather than erroring. */
+/** Requires resolveEtablissement to have run first. An unknown event id is ignored (normal service).
+ * A clôturé évènement stays the context — so reads show *its* data, never normal service's — and is
+ * flagged, so every write route can refuse it with `rejectIfEventClosed`. */
 export function resolveEventContext(req: Request, res: Response, next: NextFunction): void {
   const raw = req.header(HEADER);
   if (raw && req.etablissement) {
     const event = req.etablissement.events.get(raw);
-    if (event && event.status === 'ACTIVE') {
+    if (event) {
       req.eventId = event.id;
+      req.eventClosed = event.status === 'CLOSED';
+      // A clôturé évènement is only consulted by the Direction and its responsable.
+      const role = req.user?.role;
+      if (req.eventClosed && role && role !== 'ADMIN' && role !== 'EVENT_MANAGER') {
+        res.status(403).json({ error: "Cet évènement est clôturé : seuls la direction et le responsable d'évènement y ont accès." });
+        return;
+      }
     }
+  }
+  next();
+}
+
+export const EVENT_CLOSED_MESSAGE = 'Cet évènement est clôturé : consultation uniquement (suivi et statistiques).';
+
+/** For routes that record something (orders, stock) — nothing new goes into a clôturé évènement. */
+export function rejectIfEventClosed(req: Request, res: Response, next: NextFunction): void {
+  if (req.eventClosed) {
+    res.status(403).json({ error: EVENT_CLOSED_MESSAGE });
+    return;
   }
   next();
 }

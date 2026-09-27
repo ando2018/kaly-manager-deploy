@@ -113,6 +113,9 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         // A "Caisse directe" évènement has no kitchen step at all — every order placed under it
         // skips prep entirely and is ready for pickup the instant it's rung up (see EventServiceType).
         const event = input.eventId ? state.events.find((e) => e.id === input.eventId) : undefined;
+        if (event?.status === 'CLOSED') {
+          throw new OrderError('Cet évènement est clôturé : plus aucune commande ne peut être passée.', 403);
+        }
         const isCounterEvent = event?.serviceType === 'COUNTER';
         const type = isCounterEvent ? 'EPHEMERAL' : input.type;
 
@@ -332,6 +335,9 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
         }
         if (target.status === 'PAID' || target.status === 'CANCELLED') {
           throw new OrderError('Cette commande est clôturée et ne peut plus être modifiée.', 400);
+        }
+        if (target.eventId && state.events.find((e) => e.id === target.eventId)?.status === 'CLOSED') {
+          throw new OrderError('Cet évènement est clôturé : plus aucun article ne peut être ajouté.', 403);
         }
 
         const newItems: OrderItem[] = items.map((i) => {
