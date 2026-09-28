@@ -300,11 +300,18 @@ export function createOrdersService(db: IEtablissementDatabase, menuService: Men
       });
     },
 
-    pay(id: string, method: PaymentMethod, paidAmount: number, split: boolean): Order {
+    pay(id: string, method: PaymentMethod, paidAmount: number, split: boolean, cashReceived?: number): Order {
       return db.mutate((state) => {
         const order = state.orders.find((o) => o.id === id);
         if (!order) throw new OrderError('Commande introuvable.', 404);
         order.payment = { method, paidAmount, paidAt: new Date().toISOString(), split };
+        if (method === 'CASH' && cashReceived !== undefined) {
+          if (!Number.isFinite(cashReceived) || cashReceived < paidAmount - 0.001) {
+            throw new OrderError('Le montant reçu en espèces est inférieur au montant à payer.', 400);
+          }
+          order.payment.cashReceived = Math.round(cashReceived * 100) / 100;
+          order.payment.changeGiven = Math.round((cashReceived - paidAmount) * 100) / 100;
+        }
         // Emporter orders can be paid up front, before the kitchen has started/finished — in that
         // case the order stays SENT/IN_PREPARATION so it keeps flowing through the kitchen normally,
         // and only closes out (status PAID) once actually ready (see advanceTicket above).

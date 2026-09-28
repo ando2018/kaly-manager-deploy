@@ -127,6 +127,9 @@ export interface OrderPayment {
   paidAmount: number;
   paidAt: string;
   split?: boolean;
+  /** Cash only: what the customer handed over, and the change given back — printed on the invoice. */
+  cashReceived?: number;
+  changeGiven?: number;
 }
 
 export interface OrderStatusEvent {

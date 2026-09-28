@@ -1,6 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
-import { enforceEventManagerScope, rejectIfEventClosed, resolveEventContext } from '../middleware/event.middleware';
+import { EVENT_CLOSED_MESSAGE, enforceEventManagerScope, rejectIfEventClosed, resolveEventContext } from '../middleware/event.middleware';
 import { requireRole } from '../middleware/role.middleware';
 import { OrderError } from '../services/orders.service';
 import { broadcastAlerts, broadcastMenu, broadcastOrders } from '../sockets/io';
@@ -169,13 +169,19 @@ ordersRouter.post('/:id/confirm-to-kitchen', requireRole('CASHIER'), (req, res) 
 });
 
 ordersRouter.post('/:id/pay', requireRole('CASHIER'), (req, res) => {
-  const { method, amount, split } = req.body as { method?: string; amount?: number; split?: boolean };
+  const { method, amount, split, cashReceived } = req.body as { method?: string; amount?: number; split?: boolean; cashReceived?: number };
   if (!method || amount === undefined) {
     res.status(400).json({ error: 'method et amount sont requis.' });
     return;
   }
   handle(req, res, () => {
-    const order = req.etablissement!.orders.pay(req.params.id, method as any, Number(amount), Boolean(split));
+    const order = req.etablissement!.orders.pay(
+      req.params.id,
+      method as any,
+      Number(amount),
+      Boolean(split),
+      cashReceived === undefined || cashReceived === null ? undefined : Number(cashReceived),
+    );
     broadcastOrders(req.etablissementId!);
     return order;
   });
@@ -191,6 +197,25 @@ ordersRouter.post('/:id/pickup', requireRole('CASHIER', 'COMPTOIR'), (req, res) 
 
 ordersRouter.post('/:id/cancel', requireRole('WAITER', 'CASHIER'), (req, res) => {
   const { reason } = req.body as { reason?: string };
+  // Checked against the order's own évènement, not the X-Event-Id header: Suivi Global lets a manager
+  // look at (and act on) another évènement's tab than the one they're working in.
+  const ctx = req.etablissement!;
+  const target = ctx.db.data.orders.find((o) => o.id === req.params.id);
+  if (target) {
+    if (target.status === 'CANCELLED') {
+      res.status(400).json({ error: 'Cette commande est déjà annulée.' });
+      return;
+    }
+    const event = target.eventId ? ctx.db.data.events.find((e) => e.id === target.eventId) : undefined;
+    if (event?.status === 'CLOSED') {
+      res.status(403).json({ error: EVENT_CLOSED_MESSAGE });
+      return;
+    }
+    if (req.user!.role === 'EVENT_MANAGER' && !event?.assignedUserIds.includes(req.user!.sub)) {
+      res.status(403).json({ error: "Vous n'êtes pas affecté à l'évènement de cette commande." });
+      return;
+    }
+  }
   handle(req, res, () => {
     const order = req.etablissement!.orders.cancel(req.params.id, reason, req.user!.name);
     broadcastOrders(req.etablissementId!);
