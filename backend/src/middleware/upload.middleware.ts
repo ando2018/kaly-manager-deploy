@@ -95,3 +95,66 @@ export function searchImageLibrary(query: string, limit = 60): LibraryImage[] {
     .sort((a, b) => a.name.localeCompare(b.name));
   return showAll ? results : results.slice(0, limit);
 }
+
+/** Every library image with its size and date — for the platform admin's management screen. */
+export function listImageLibrary(): (LibraryImage & { file: string; size: number; addedAt: string })[] {
+  let files: string[];
+  try {
+    files = fs.readdirSync(IMAGE_LIBRARY_DIR);
+  } catch {
+    return [];
+  }
+  return files
+    .filter((f) => LIBRARY_IMAGE_EXTENSIONS.has(path.extname(f).toLowerCase()))
+    .map((f) => {
+      const stat = fs.statSync(path.join(IMAGE_LIBRARY_DIR, f));
+      return {
+        file: f,
+        name: path.basename(f, path.extname(f)).replace(/[-_]+/g, ' ').trim(),
+        url: `${IMAGE_LIBRARY_PUBLIC_PATH}/${f}`,
+        size: stat.size,
+        addedAt: stat.mtime.toISOString(),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The file name is what staff search by: « Crêpe au sucre » → « crepe-au-sucre ». */
+function slugifyImageName(value: string): string {
+  return normalizeForSearch(value)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+/** Library uploads land straight in IMAGE_LIBRARY_DIR, named after the product (never overwriting). */
+export const libraryImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, IMAGE_LIBRARY_DIR),
+    filename: (req: Request, file, cb) => {
+      const ext = ALLOWED_MIME_TO_EXT[file.mimetype] ?? '.jpg';
+      const requested = typeof req.body?.name === 'string' ? req.body.name : '';
+      const base = slugifyImageName(requested || path.basename(file.originalname, path.extname(file.originalname))) || 'image';
+      let candidate = `${base}${ext}`;
+      for (let n = 2; fs.existsSync(path.join(IMAGE_LIBRARY_DIR, candidate)); n++) candidate = `${base}-${n}${ext}`;
+      cb(null, candidate);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024, files: 20 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_MIME_TO_EXT[file.mimetype]) {
+      cb(new Error("Format d'image non supporté (JPEG, PNG, WEBP ou GIF uniquement)."));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+/** Deletes one library file. Refuses anything that isn't a plain image file name inside the folder. */
+export function deleteLibraryImage(file: string): boolean {
+  if (!file || file !== path.basename(file) || !LIBRARY_IMAGE_EXTENSIONS.has(path.extname(file).toLowerCase())) return false;
+  const full = path.join(IMAGE_LIBRARY_DIR, file);
+  if (!fs.existsSync(full)) return false;
+  fs.unlinkSync(full);
+  return true;
+}

@@ -16,7 +16,7 @@ import {
 } from '../data/firebase-admin';
 import { StorageBackend } from '../data/platform';
 import { PLAN_DAYS, SubscriptionPlan, subscriptions } from '../data/subscriptions';
-import { etablissementUploadsDir } from '../middleware/upload.middleware';
+import { deleteLibraryImage, etablissementUploadsDir, libraryImageUpload, listImageLibrary } from '../middleware/upload.middleware';
 import { broadcastUsers } from '../sockets/io';
 import { asyncHandler } from '../utils/async-handler';
 
@@ -173,6 +173,43 @@ platformRouter.patch('/etablissements/:id/admin-email', (req, res) => {
     return;
   }
   res.json(platform.setAdminEmail(req.params.id, adminEmail));
+});
+
+// ---- Bibliothèque d'images produits (shared by every établissement, served from /image-library) ----
+
+platformRouter.get('/image-library', (_req, res) => {
+  res.json(listImageLibrary());
+});
+
+/** One or several images (field « images »); an optional « name » names a single upload. */
+platformRouter.post('/image-library', (req, res) => {
+  libraryImageUpload.array('images', 20)(req, res, (err: unknown) => {
+    if (err) {
+      const message =
+        err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+          ? 'Image trop lourde (5 Mo maximum).'
+          : err instanceof Error
+            ? err.message
+            : "Échec de l'envoi.";
+      res.status(400).json({ error: message });
+      return;
+    }
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (!files.length) {
+      res.status(400).json({ error: 'Aucune image reçue.' });
+      return;
+    }
+    const added = new Set(files.map((f) => f.filename));
+    res.status(201).json(listImageLibrary().filter((img) => added.has(img.file)));
+  });
+});
+
+platformRouter.delete('/image-library/:file', (req, res) => {
+  if (!deleteLibraryImage(req.params.file)) {
+    res.status(404).json({ error: 'Image introuvable.' });
+    return;
+  }
+  res.status(204).send();
 });
 
 // The guide PDF is built in the browser (it embeds the app's own screenshots), then handed over here
