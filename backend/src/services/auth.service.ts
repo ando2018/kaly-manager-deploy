@@ -26,19 +26,27 @@ export function verifyToken(token: string): TokenPayload | null {
 }
 
 export function createAuthService(db: IEtablissementDatabase, etablissementId: string) {
+  /** Direction and responsables d'évènement always sign in; everyone else only while assigned to an
+   * évènement that is still active (a clôturé one is closed to them anyway). */
+  const canSignIn = (user: User): boolean =>
+    user.role === 'ADMIN' ||
+    user.role === 'EVENT_MANAGER' ||
+    db.data.events.some((e) => e.status === 'ACTIVE' && e.assignedUserIds.includes(user.id));
+
   return {
     listPublicProfiles(): PublicUser[] {
-      return db.data.users.map(toPublicUser);
+      return db.data.users.filter(canSignIn).map(toPublicUser);
     },
 
     login(
       userId: string,
       pinCode: string,
-    ): { user: PublicUser; token: string } | { error: 'invalid' | 'suspended' } {
+    ): { user: PublicUser; token: string } | { error: 'invalid' | 'suspended' | 'unassigned' } {
       const user = db.data.users.find((u) => u.id === userId);
       if (!user) return { error: 'invalid' };
       if (user.suspended) return { error: 'suspended' };
       if (!bcrypt.compareSync(pinCode, user.pinHash)) return { error: 'invalid' };
+      if (!canSignIn(user)) return { error: 'unassigned' };
 
       const payload: TokenPayload = { sub: user.id, name: user.name, role: user.role, etablissementId };
       const token = jwt.sign(payload, config.jwtSecret, { expiresIn: '12h' });

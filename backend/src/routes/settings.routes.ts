@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
-import { requireRole } from '../middleware/role.middleware';
+import { requireAdminOnly, requireRole } from '../middleware/role.middleware';
 import { CustomThemeColors, ThemeId } from '../models/types';
 import { etablissementUploadsDir, imageUpload, UPLOADS_PUBLIC_PATH } from '../middleware/upload.middleware';
-import { broadcastLogo, broadcastTheme } from '../sockets/io';
+import { broadcastLogo, broadcastTheme, broadcastVat } from '../sockets/io';
 
 const THEME_IDS: ThemeId[] = [
   'emerald',
@@ -44,7 +44,24 @@ settingsRouter.get('/', (req, res) => {
     theme: req.etablissement!.db.data.theme ?? 'emerald',
     customTheme: req.etablissement!.db.data.customTheme,
     logoUrl: req.etablissement!.db.data.logoUrl,
+    vatRate: req.etablissement!.db.data.vatRate,
   });
+});
+
+/** TVA rate printed on invoices — Direction only. null / 0 removes it (no TVA lines printed). */
+settingsRouter.patch('/vat', requireAuth, requireAdminOnly, (req, res) => {
+  const raw = (req.body as { vatRate?: unknown }).vatRate;
+  const rate = raw === null || raw === '' || raw === undefined ? 0 : Number(raw);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+    res.status(400).json({ error: 'Taux de TVA invalide (entre 0 et 100 %).' });
+    return;
+  }
+  const vatRate = rate > 0 ? Math.round(rate * 100) / 100 : undefined;
+  req.etablissement!.db.mutate((state) => {
+    state.vatRate = vatRate;
+  });
+  broadcastVat(req.etablissementId!, vatRate);
+  res.json({ vatRate });
 });
 
 settingsRouter.patch('/theme', requireAuth, requireRole(), (req, res) => {

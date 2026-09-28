@@ -227,6 +227,8 @@ export interface DbShape {
   customTheme?: CustomThemeColors;
   /** The organization's own logo — shown in the sidebar brand mark in place of the default "KM" mark. */
   logoUrl?: string;
+  /** TVA rate in % applied to the (TTC) prices, printed on invoices — set by the Direction. Absent = none. */
+  vatRate?: number;
   stockHistory: StockHistoryEntry[];
   /** Set once "Disponible à la vente" stopped being auto-unchecked by stock hitting 0 (see migrate()). */
   availabilityDecoupled?: boolean;

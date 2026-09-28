@@ -50,6 +50,7 @@ export function initSockets(httpServer: HttpServer): SocketIOServer {
       theme: context.db.data.theme ?? 'emerald',
       customTheme: context.db.data.customTheme,
     });
+    socket.emit('state:vat', { vatRate: context.db.data.vatRate });
   });
 
   return io;
@@ -83,6 +84,10 @@ export function broadcastEvents(etablissementId: string): void {
 
 export function broadcastTheme(etablissementId: string, theme: string, customTheme?: unknown): void {
   io?.to(etablissementId).emit('state:theme', { theme, customTheme });
+}
+
+export function broadcastVat(etablissementId: string, vatRate: number | undefined): void {
+  io?.to(etablissementId).emit('state:vat', { vatRate });
 }
 
 export function broadcastLogo(etablissementId: string, logoUrl: string | undefined): void {

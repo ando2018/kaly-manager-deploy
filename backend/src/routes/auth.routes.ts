@@ -20,6 +20,10 @@ authRouter.post('/login', (req, res) => {
       res.status(403).json({ error: 'Ce compte est suspendu. Contactez votre administrateur.' });
       return;
     }
+    if (result.error === 'unassigned') {
+      res.status(403).json({ error: "Vous n'êtes affecté à aucun évènement en cours. Contactez votre responsable." });
+      return;
+    }
     res.status(401).json({ error: 'Code PIN incorrect.' });
     return;
   }
