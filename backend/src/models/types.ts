@@ -205,7 +205,12 @@ export interface WaiterAlert {
 
 export interface Counters {
   table: number;
+  /** Today's take-away (EMP) order sequence — restarts at 1 each day (see orderDay). */
   order: number;
+  /** ddmmyy of the day `order` / `tableUses` count for. Absent on data created before the daily reset existed. */
+  orderDay?: string;
+  /** Today's number of orders per table (table number → count): a table seats several customers a day. */
+  tableUses?: Record<string, number>;
 }
 
 /** One évènement's independent stock for one menu item — the catalogue entry itself (name/price/

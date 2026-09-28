@@ -168,7 +168,7 @@ export function buildDemoSeed(): DbShape {
   const orders: Order[] = [
     {
       id: 'o101',
-      orderNumber: `T-${datePrefix}-87`,
+      orderNumber: `TAB-${datePrefix}-001-0004`,
       type: 'TABLE',
       tableNumber: 4,
       guestCount: 3,
@@ -215,7 +215,7 @@ export function buildDemoSeed(): DbShape {
     },
     {
       id: 'o102',
-      orderNumber: `EMP-${datePrefix}-88`,
+      orderNumber: `EMP-${datePrefix}-0088`,
       type: 'EPHEMERAL',
       customerName: 'Thomas (A emporter)',
       status: 'READY',

@@ -61,19 +61,36 @@ function recordStatus(order: Order, status: OrderStatus): void {
 }
 
 export function createOrdersService(db: IEtablissementDatabase, menuService: MenuService) {
-  /** Order numbers are prefixed by type, date-stamped (ddmmyy) and end on a running per-établissement sequence: "T-170926-14" / "EMP-170926-15". */
+  /**
+   * Date-stamped (ddmmyy), counters restarting each morning:
+   * - take-away / caisse directe: "EMP-170926-0001" — the day's take-away sequence;
+   * - table: "TAB-170926-003-0012" — 3rd order of the day at table 12 (several customers use a table).
+   */
   function generateOrderNumber(type: OrderType, tableNumber: number | undefined): string {
     if (type === 'TABLE' && (!tableNumber || tableNumber > db.data.counters.table)) {
       db.data.counters.table = tableNumber ?? db.data.counters.table + 1;
     }
-    db.data.counters.order += 1;
 
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yy = String(now.getFullYear()).slice(-2);
-    const prefix = type === 'TABLE' ? 'T' : 'EMP';
-    return `${prefix}-${dd}${mm}${yy}-${db.data.counters.order}`;
+    const day = `${dd}${mm}${yy}`;
+    const counters = db.data.counters;
+    if (counters.orderDay !== day) {
+      counters.orderDay = day;
+      counters.order = 0;
+      counters.tableUses = {};
+    }
+
+    if (type === 'TABLE') {
+      const table = tableNumber ?? counters.table;
+      const uses = (counters.tableUses ??= {});
+      uses[table] = (uses[table] ?? 0) + 1;
+      return `TAB-${day}-${String(uses[table]).padStart(3, '0')}-${String(table).padStart(4, '0')}`;
+    }
+    counters.order += 1;
+    return `EMP-${day}-${String(counters.order).padStart(4, '0')}`;
   }
 
   const service = {
