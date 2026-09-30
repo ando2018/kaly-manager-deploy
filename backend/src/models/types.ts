@@ -15,7 +15,7 @@ export type OrderStatus =
 
 export type MenuCategory = 'ENTREE' | 'MAIN' | 'DESSERT' | 'DRINK' | 'AUTRES';
 
-export type PaymentMethod = 'CB' | 'CASH' | 'TICKET_RESTAURANT' | 'MOBILE_PASS';
+export type PaymentMethod = 'CB' | 'CASH' | 'CHEQUE' | 'TICKET_RESTAURANT' | 'MOBILE_PASS';
 
 export type ThemeId =
   | 'emerald'
