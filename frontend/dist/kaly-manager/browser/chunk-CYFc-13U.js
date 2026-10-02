@@ -1,1 +1,0 @@
-import{Jt as g,an as ie}from"./chunk-CLhJuQkn.js";var c=180*1e3;function f(t,r=c){let n=g(ie),s=setInterval(()=>{Promise.resolve(t()).catch(()=>{})},r);n.onDestroy(()=>clearInterval(s))}export{f as t};
