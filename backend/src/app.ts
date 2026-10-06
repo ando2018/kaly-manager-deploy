@@ -52,6 +52,19 @@ export function createApp() {
   if (hasTokenManagerBuild) {
     app.use('/tokens', express.static(TOKEN_MANAGER_DIST));
     app.get(/^\/tokens(\/.*)?$/, (_req, res) => res.sendFile(TOKEN_MANAGER_INDEX));
+  } else {
+    // Not built on this server: say so, instead of falling through to the Kaly Manager app.
+    console.warn(`Gestion des tokens non compilée (${TOKEN_MANAGER_INDEX} introuvable) : /tokens indisponible.`);
+    app.get(/^\/tokens(\/.*)?$/, (_req, res) => {
+      res
+        .status(503)
+        .type('text/plain; charset=utf-8')
+        .send(
+          'Gestion des tokens non compilée sur ce serveur.\n\n' +
+            'Sur le serveur : npm install --prefix token-manager && npm run build --prefix token-manager,\n' +
+            'puis redémarrez le backend (pm2 reload kaly-manager).',
+        );
+    });
   }
 
   // Everything below operates within a single établissement's isolated data, resolved from X-Etablissement-Id.
