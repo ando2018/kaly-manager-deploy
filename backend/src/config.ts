@@ -1,6 +1,17 @@
-import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
+import dotenv from 'dotenv';
+
+/** backend/.env — found from this file (src/ with tsx, dist/ once built), not from the folder the server
+ * was started in: started from elsewhere (e.g. `pm2 start backend/dist/server.js` from the repo root), a
+ * cwd-relative .env would silently be missed (no SMTP, default keys…). */
+export const ENV_FILE = path.resolve(__dirname, '..', '.env');
+const envLoaded = fs.existsSync(ENV_FILE) && !dotenv.config({ path: ENV_FILE }).error;
+if (!envLoaded) console.warn(`Fichier de configuration introuvable : ${ENV_FILE} — valeurs par défaut utilisées.`);
 
 export const config = {
+  /** Whether backend/.env was found and read at startup (shown in /ap). */
+  envFile: { path: ENV_FILE, loaded: envLoaded },
   port: Number(process.env.PORT ?? 3001),
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
   // corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:4200',

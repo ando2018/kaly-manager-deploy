@@ -307,7 +307,20 @@ platformRouter.use(requirePlatformKey);
 
 /** Whether outgoing notification e-mails are set up (SMTP_HOST + NOTIFY_EMAIL in backend/.env). */
 platformRouter.get('/mail/status', (_req, res) => {
-  res.json({ configured: isMailConfigured(), host: config.smtp.host ?? null, to: config.notifyEmail ?? null });
+  res.json({
+    configured: isMailConfigured(),
+    host: config.smtp.host ?? null,
+    to: config.notifyEmail ?? null,
+    // What's missing, to say exactly what to fix in /ap.
+    envFile: config.envFile.path,
+    envLoaded: config.envFile.loaded,
+    missing: [
+      !config.smtp.host && 'SMTP_HOST',
+      !config.smtp.user && 'SMTP_USER',
+      !config.smtp.pass && 'SMTP_PASS',
+      !config.notifyEmail && 'NOTIFY_EMAIL',
+    ].filter(Boolean),
+  });
 });
 
 /** Sends a test e-mail to NOTIFY_EMAIL so the SMTP settings can be checked from /ap. */
