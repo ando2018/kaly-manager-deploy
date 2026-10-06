@@ -15,8 +15,9 @@ declare global {
 
 const HEADER = 'x-etablissement-id';
 
-/** Writes still allowed while consultation-only: signing in. */
-const READ_ONLY_ALLOWED_WRITES = ['/api/auth/login', '/api/auth/change-pin'];
+/** Writes still allowed while consultation-only: signing in, and writing to the platform (Contact) — a
+ * lapsed établissement is exactly the one that needs to reach us; it records nothing in its own data. */
+const READ_ONLY_ALLOWED_WRITES = ['/api/auth/login', '/api/auth/change-pin', '/api/support'];
 
 export const resolveEtablissement = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const raw = req.header(HEADER);
