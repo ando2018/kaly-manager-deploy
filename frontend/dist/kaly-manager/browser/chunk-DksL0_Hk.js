@@ -1,1 +1,0 @@
-var o={version:`1.0.0`,buildDate:`2026-10-06T12:51:11.408Z`,commit:`67b6d59`};export{o as t};
