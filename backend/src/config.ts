@@ -10,6 +10,8 @@ const envLoaded = fs.existsSync(ENV_FILE) && !dotenv.config({ path: ENV_FILE }).
 if (!envLoaded) console.warn(`Fichier de configuration introuvable : ${ENV_FILE} — valeurs par défaut utilisées.`);
 
 export const config = {
+  /** Where Kaly Manager is served (the site root leads to the subscription page, /tokens/). */
+  kalyAppPath: '/km',
   /** Whether backend/.env was found and read at startup (shown in /ap). */
   envFile: { path: ENV_FILE, loaded: envLoaded },
   port: Number(process.env.PORT ?? 3001),

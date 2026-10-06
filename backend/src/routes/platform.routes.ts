@@ -247,7 +247,7 @@ export async function kalyPurchase(
         tokenCode: token.code,
         purchasedAt: new Date(),
         accessUntil: new Date(status.accessUntil),
-        link: origin ? `${origin}/etablissement/${meta.id}` : undefined,
+        link: origin ? `${origin}${config.kalyAppPath}/etablissement/${meta.id}` : undefined,
       });
       emailedTo = to;
     } catch (err) {
@@ -443,7 +443,7 @@ platformRouter.post(
       res.status(400).json({ error: 'Guide PDF manquant.' });
       return;
     }
-    const link = `${req.protocol}://${req.get('host')}/etablissement/${meta.id}`;
+    const link = `${req.protocol}://${req.get('host')}${config.kalyAppPath}/etablissement/${meta.id}`;
     const text = [
       `Bonjour${meta.adminName ? ` ${meta.adminName}` : ''},`,
       '',
@@ -578,7 +578,7 @@ platformRouter.post(
           etablissementId: meta.id,
           userName: updated.name,
           pinCode,
-          link: origin ? `${origin}/etablissement/${meta.id}` : undefined,
+          link: origin ? `${origin}${config.kalyAppPath}/etablissement/${meta.id}` : undefined,
         });
         emailedTo = meta.adminEmail;
       } catch (err) {

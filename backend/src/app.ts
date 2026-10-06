@@ -30,6 +30,25 @@ const hasFrontendBuild = fs.existsSync(FRONTEND_INDEX);
 const TOKEN_MANAGER_DIST = path.resolve(__dirname, '..', '..', 'token-manager', 'dist', 'token-manager', 'browser');
 const TOKEN_MANAGER_INDEX = path.join(TOKEN_MANAGER_DIST, 'index.html');
 const hasTokenManagerBuild = fs.existsSync(TOKEN_MANAGER_INDEX);
+const SAFETY_WORKER = path.join(FRONTEND_DIST, 'safety-worker.js');
+const KALY_PATH = config.kalyAppPath;
+
+/** The site root: to the subscription page — or to Kaly Manager when opened as the installed app. */
+const ROOT_PAGE = `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaly Manager</title>
+<script>
+  var installed = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  location.replace(installed ? '${KALY_PATH}/' : '/tokens/');
+</script>
+</head>
+<body style="background:#0f172a;color:#f1f5f9;font-family:system-ui,sans-serif;text-align:center;padding:3rem 1rem">
+<p><a style="color:#10b981" href="/tokens/">Abonnements</a> · <a style="color:#10b981" href="${KALY_PATH}/">Kaly Manager</a></p>
+</body>
+</html>`;
 
 
 export function createApp() {
@@ -39,8 +58,23 @@ export function createApp() {
   app.use(express.json());
   app.use(UPLOADS_PUBLIC_PATH, express.static(UPLOADS_DISK_PATH));
   app.use(IMAGE_LIBRARY_PUBLIC_PATH, express.static(IMAGE_LIBRARY_DISK_PATH));
+  // The site root: the subscription page — except for Kaly Manager installed on a home screen (its old
+  // start URL is /), which keeps opening Kaly Manager.
+  app.get('/', (_req, res) => {
+    res.type('html').send(ROOT_PAGE);
+  });
+
   if (hasFrontendBuild) {
-    app.use(express.static(FRONTEND_DIST));
+    app.use(KALY_PATH, express.static(FRONTEND_DIST));
+    // Kaly Manager's service worker used to live at the root: browsers that still have it get Angular's
+    // « safety worker », which unregisters itself and clears its caches (otherwise the old cached app
+    // would keep answering every page of the site, /tokens/ included).
+    app.get('/ngsw-worker.js', (_req, res) => {
+      res.set('Cache-Control', 'no-cache');
+      if (fs.existsSync(SAFETY_WORKER)) res.sendFile(SAFETY_WORKER);
+      else res.status(404).end();
+    });
+    app.get('/ngsw.json', (_req, res) => res.status(404).end());
   }
 
   app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
@@ -82,9 +116,14 @@ export function createApp() {
   app.use('/api/public-order', resolveEtablissement, publicOrderRouter);
 
   if (hasFrontendBuild) {
-    // Any other GET is a client-side route (Angular Router) — let the SPA shell handle it.
-    app.get(/^\/(?!api\/|uploads\/|image-library\/).*/, (_req, res) => {
+    // Any other GET under /km is a client-side route (Angular Router) — let the SPA shell handle it.
+    app.get(/^\/km(\/.*)?$/, (_req, res) => {
       res.sendFile(FRONTEND_INDEX);
+    });
+    // Kaly Manager's addresses from before /km (table QR codes already printed, links in e-mails,
+    // bookmarks): /etablissement/…, /commande-table/… → /km/etablissement/…, /km/commande-table/…
+    app.get(/^\/(?!api\/|uploads\/|image-library\/|tokens(\/|$)|km(\/|$)|socket\.io\/).+/, (req, res) => {
+      res.redirect(302, `${KALY_PATH}${req.originalUrl}`);
     });
   }
 
