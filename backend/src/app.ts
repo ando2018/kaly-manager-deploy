@@ -9,6 +9,7 @@ import { menuRouter } from './routes/menu.routes';
 import { alertsRouter, ordersRouter } from './routes/orders.routes';
 import { uploadsRouter } from './routes/uploads.routes';
 import { platformRouter } from './routes/platform.routes';
+import { tokensRouter } from './routes/tokens.routes';
 import { settingsRouter } from './routes/settings.routes';
 import { supportRouter } from './routes/support.routes';
 import { eventsRouter } from './routes/events.routes';
@@ -25,6 +26,10 @@ import { resolveEtablissement } from './middleware/etablissement.middleware';
 const FRONTEND_DIST = path.resolve(__dirname, '..', '..', 'frontend', 'dist', 'kaly-manager', 'browser');
 const FRONTEND_INDEX = path.join(FRONTEND_DIST, 'index.html');
 const hasFrontendBuild = fs.existsSync(FRONTEND_INDEX);
+// The token-manager app (../token-manager), built with base href /tokens/.
+const TOKEN_MANAGER_DIST = path.resolve(__dirname, '..', '..', 'token-manager', 'dist', 'token-manager', 'browser');
+const TOKEN_MANAGER_INDEX = path.join(TOKEN_MANAGER_DIST, 'index.html');
+const hasTokenManagerBuild = fs.existsSync(TOKEN_MANAGER_INDEX);
 
 
 export function createApp() {
@@ -42,6 +47,12 @@ export function createApp() {
 
   // Platform-level: creating/listing etablissements, or checking an id exists. Not scoped to an établissement.
   app.use('/api/platform', platformRouter);
+  // Tokens of every application on this backend — managed from the token-manager app.
+  app.use('/api/tokens', tokensRouter);
+  if (hasTokenManagerBuild) {
+    app.use('/tokens', express.static(TOKEN_MANAGER_DIST));
+    app.get(/^\/tokens(\/.*)?$/, (_req, res) => res.sendFile(TOKEN_MANAGER_INDEX));
+  }
 
   // Everything below operates within a single établissement's isolated data, resolved from X-Etablissement-Id.
   app.use('/api/auth', resolveEtablissement, authRouter);

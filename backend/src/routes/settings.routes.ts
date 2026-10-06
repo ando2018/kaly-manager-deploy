@@ -6,6 +6,8 @@ import { requireAdminOnly, requireRole } from '../middleware/role.middleware';
 import { CustomThemeColors, ThemeId } from '../models/types';
 import { etablissementUploadsDir, imageUpload, UPLOADS_PUBLIC_PATH } from '../middleware/upload.middleware';
 import { broadcastLogo, broadcastTheme, broadcastVat } from '../sockets/io';
+import { platform } from '../data/platform';
+import { subscriptions } from '../data/subscriptions';
 
 const THEME_IDS: ThemeId[] = [
   'emerald',
@@ -46,6 +48,27 @@ settingsRouter.get('/', (req, res) => {
     logoUrl: req.etablissement!.db.data.logoUrl,
     vatRate: req.etablissement!.db.data.vatRate,
   });
+});
+
+/** Current subscription + every purchase / token / suspension, most recent first — Direction only. */
+settingsRouter.get('/subscription-history', requireAuth, requireAdminOnly, (req, res) => {
+  const detail = platform.subscriptionDetail(req.etablissementId!);
+  if (!detail) {
+    res.status(404).json({ error: 'Établissement introuvable.' });
+    return;
+  }
+  const { history, ...status } = detail;
+  const events = history
+    .map((h) => {
+      const def = h.plan ? subscriptions.findPlan(h.plan) : undefined;
+      return {
+        ...h,
+        planLabel: h.planLabel ?? def?.label ?? h.plan,
+        durationLabel: h.durationLabel ?? (def ? subscriptions.durationLabel(def) : h.days ? `${Math.round(h.days * 100) / 100} j` : undefined),
+      };
+    })
+    .reverse();
+  res.json({ status, events });
 });
 
 /** TVA rate printed on invoices — Direction only. null / 0 removes it (no TVA lines printed). */

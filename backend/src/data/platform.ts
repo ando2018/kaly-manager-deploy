@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PlatformDocStore } from './platform-doc-store';
-import { SubscriptionPlan, TRIAL_DAYS } from './subscriptions';
+import { SubscriptionPlan, TRIAL_DAYS, subscriptions } from './subscriptions';
 
 export type StorageBackend = 'LOCAL' | 'FIRESTORE';
 
@@ -12,6 +12,14 @@ export interface SubscriptionEvent {
   plan?: SubscriptionPlan;
   days: number;
   tokenCode?: string;
+  /** Snapshot of what was bought (absent on older events). */
+  planLabel?: string;
+  durationLabel?: string;
+  price?: number;
+  /** Bought online from the app (vs. a token typed in, or granted by the platform). */
+  purchase?: boolean;
+  /** Access end right after this extension — the added time stacks on whatever was left. */
+  accessUntil?: string;
 }
 
 export interface SubscriptionState {
@@ -33,6 +41,12 @@ export interface SubscriptionStatus {
   expiresAt: string | null;
   accessUntil: string;
   daysLeft: number;
+  archived: boolean;
+  /** An e-mail is on file for the Direction (where a purchased token is sent) — the address itself stays private. */
+  hasAdminEmail: boolean;
+  /** Had a subscription before, now expired / suspended / archived: everything can still be consulted
+   * (stock, suivi, caisse, statistiques) but nothing new can be recorded until a new subscription. */
+  readOnly: boolean;
 }
 
 export interface EtablissementMeta {
@@ -120,21 +134,121 @@ function ensureSubscription(meta: EtablissementMeta): SubscriptionState {
   return meta.subscription;
 }
 
+/** Ever had real access (a redeemed token or an admin grant) — as opposed to a never-activated établissement. */
+function everSubscribed(sub: SubscriptionState): boolean {
+  return !!sub.expiresAt || sub.history.some((h) => h.action === undefined || h.action === 'EXTEND');
+}
+
+/** One block of paid access for an établissement, in activation order — shown in /ap. */
+export interface AccessPeriod {
+  kind: 'TOKEN' | 'ADMIN';
+  tokenCode?: string;
+  planLabel?: string;
+  days: number;
+  price?: number;
+  purchase?: boolean;
+  activatedAt: string;
+  /** Null for a token that no longer counts (revoked, or deleted from the list). */
+  start: string | null;
+  end: string | null;
+  status: 'COUNTED' | 'REVOKED' | 'DELETED';
+}
+
+/**
+ * Paid access is worked out from the token list, not from a stored date: every token this établissement
+ * redeemed that is still in the list and not revoked counts, one after the other (each starts when it was
+ * redeemed, or when the previous one ends if that's later). A token deleted or revoked in /ap therefore
+ * stops counting at once. Access only ever comes from tokens (bought or typed in) — no platform grants.
+ * Returns null when the token store can't be read yet (boot).
+ */
+/** A plan id as a label (« Mois » rather than MONTH) — old history entries only stored the id. */
+function labelOf(plan: SubscriptionPlan | undefined): string | undefined {
+  if (!plan) return undefined;
+  return subscriptions.findPlan(plan)?.label ?? ({ DAY: '1 jour', TWO_DAYS: '2 jours', WEEK: 'Semaine', MONTH: 'Mois', YEAR: 'An' } as Record<string, string>)[plan] ?? plan;
+}
+
+function accessPeriodsFor(meta: EtablissementMeta, sub: SubscriptionState): AccessPeriod[] | null {
+  let tokens: ReturnType<typeof subscriptions.listTokens>;
+  try {
+    tokens = subscriptions.listTokens().filter((t) => t.usedByEtablissementId === meta.id && t.usedAt);
+  } catch {
+    return null;
+  }
+  const byCode = new Map(tokens.map((t) => [t.code, t]));
+  const periods: AccessPeriod[] = [];
+  for (const t of tokens) {
+    const event = sub.history.find((h) => h.tokenCode === t.code);
+    periods.push({
+      kind: 'TOKEN',
+      tokenCode: t.code,
+      planLabel: t.planLabel ?? event?.planLabel ?? subscriptions.findPlan(t.plan)?.label ?? t.plan,
+      days: subscriptions.daysFor(t),
+      price: event?.price,
+      purchase: event?.purchase,
+      activatedAt: t.usedAt!,
+      start: null,
+      end: null,
+      status: t.revoked ? 'REVOKED' : 'COUNTED',
+    });
+  }
+  for (const h of sub.history) {
+    if ((h.action ?? 'EXTEND') !== 'EXTEND') continue;
+    if (h.tokenCode && !byCode.has(h.tokenCode)) {
+      // Redeemed once, since deleted from the token list: listed for the record, no longer counted.
+      periods.push({
+        kind: 'TOKEN',
+        tokenCode: h.tokenCode,
+        planLabel: h.planLabel ?? labelOf(h.plan),
+        days: h.days,
+        price: h.price,
+        purchase: h.purchase,
+        activatedAt: h.at,
+        start: null,
+        end: null,
+        status: 'DELETED',
+      });
+    }
+  }
+  periods.sort((a, b) => new Date(a.activatedAt).getTime() - new Date(b.activatedAt).getTime());
+  let chainEnd = -Infinity;
+  for (const p of periods) {
+    if (p.status !== 'COUNTED') continue;
+    const startMs = Math.max(new Date(p.activatedAt).getTime(), chainEnd);
+    chainEnd = startMs + p.days * 24 * 60 * 60 * 1000;
+    p.start = new Date(startMs).toISOString();
+    p.end = new Date(chainEnd).toISOString();
+  }
+  return periods;
+}
+
+/** End of paid access in ms (null when nothing counts) — the end of the last counted period. */
+function paidAccessEnd(meta: EtablissementMeta, sub: SubscriptionState): number | null {
+  const periods = accessPeriodsFor(meta, sub);
+  if (!periods) return sub.expiresAt ? new Date(sub.expiresAt).getTime() : null;
+  const ends = periods.filter((p) => p.end).map((p) => new Date(p.end!).getTime());
+  return ends.length ? Math.max(...ends) : null;
+}
+
 function statusFor(meta: EtablissementMeta): SubscriptionStatus {
   const sub = ensureSubscription(meta);
   const trialMs = new Date(sub.trialEndsAt).getTime();
-  const expiresMs = sub.expiresAt ? new Date(sub.expiresAt).getTime() : -Infinity;
-  const accessUntilMs = Math.max(trialMs, expiresMs);
+  const paidEnd = paidAccessEnd(meta, sub);
+  const expiresMs = paidEnd ?? -Infinity;
   const now = Date.now();
-  const suspended = sub.suspended === true;
+  // A protected établissement (the test sandbox) is never gated behind a subscription.
+  const accessUntilMs = meta.protected ? now + 100 * 365 * 24 * 60 * 60 * 1000 : Math.max(trialMs, expiresMs);
+  const suspended = sub.suspended === true && !meta.protected;
   return {
     active: !suspended && now < accessUntilMs,
     inTrial: !suspended && now < trialMs,
     suspended,
     trialEndsAt: sub.trialEndsAt,
-    expiresAt: sub.expiresAt ?? null,
+    expiresAt: paidEnd !== null ? new Date(paidEnd).toISOString() : null,
     accessUntil: new Date(accessUntilMs).toISOString(),
     daysLeft: suspended ? 0 : Math.max(0, Math.ceil((accessUntilMs - now) / (24 * 60 * 60 * 1000))),
+    archived: meta.archived === true,
+    hasAdminEmail: !!meta.adminEmail,
+    readOnly: (meta.archived === true || suspended || now >= accessUntilMs) && everSubscribed(sub),
   };
 }
 
@@ -259,6 +373,13 @@ export const platform = {
     return status;
   },
 
+  /** Every token / grant of this établissement in activation order, with its start and end — /ap list. */
+  accessPeriods(id: string): AccessPeriod[] {
+    const meta = load().etablissements.find((r) => r.id === id.trim().toUpperCase());
+    if (!meta) return [];
+    return accessPeriodsFor(meta, ensureSubscription(meta)) ?? [];
+  },
+
   /** Status + full redemption history — used by the platform admin subscription panel. */
   subscriptionDetail(id: string): (SubscriptionStatus & { history: SubscriptionEvent[] }) | undefined {
     const data = load();
@@ -277,7 +398,16 @@ export const platform = {
    */
   extendSubscription(
     id: string,
-    event: { source: 'TOKEN' | 'ADMIN'; days: number; plan?: SubscriptionPlan; tokenCode?: string },
+    event: {
+      source: 'TOKEN' | 'ADMIN';
+      days: number;
+      plan?: SubscriptionPlan;
+      tokenCode?: string;
+      planLabel?: string;
+      durationLabel?: string;
+      price?: number;
+      purchase?: boolean;
+    },
   ): SubscriptionStatus {
     const data = load();
     const normalized = id.trim().toUpperCase();
@@ -286,20 +416,29 @@ export const platform = {
       throw new Error(`Établissement not found: ${id}`);
     }
     const sub = ensureSubscription(meta);
-    const currentAccessUntil = Math.max(new Date(sub.trialEndsAt).getTime(), sub.expiresAt ? new Date(sub.expiresAt).getTime() : -Infinity);
-    const base = Math.max(Date.now(), currentAccessUntil);
-    sub.expiresAt = addDays(new Date(base), event.days).toISOString();
     // A fresh token/grant is exactly how a suspended établissement is meant to get back in.
     sub.suspended = false;
     sub.suspendedAt = undefined;
-    sub.history.push({
+    // …and an archived one too: a new subscription brings it back into service.
+    meta.archived = false;
+    meta.archivedAt = undefined;
+    const entry: SubscriptionEvent = {
       at: new Date().toISOString(),
       source: event.source,
       action: 'EXTEND',
       plan: event.plan,
       days: event.days,
       tokenCode: event.tokenCode,
-    });
+      planLabel: event.planLabel,
+      durationLabel: event.durationLabel,
+      price: event.price,
+      purchase: event.purchase,
+    };
+    sub.history.push(entry);
+    // The redeemed token (already marked used) or this grant is now part of the chain — recompute from it.
+    const end = paidAccessEnd(meta, sub);
+    sub.expiresAt = end !== null ? new Date(end).toISOString() : undefined;
+    entry.accessUntil = sub.expiresAt;
     save(data);
     return statusFor(meta);
   },

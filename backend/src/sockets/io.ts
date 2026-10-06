@@ -34,7 +34,7 @@ export function initSockets(httpServer: HttpServer): SocketIOServer {
 
     const meta = platform.findEtablissement(context.id);
     const subscription = platform.subscriptionStatus(context.id);
-    if (meta?.archived || (subscription && !subscription.active)) {
+    if (!subscription?.readOnly && (meta?.archived || (subscription && !subscription.active))) {
       socket.disconnect(true);
       return;
     }

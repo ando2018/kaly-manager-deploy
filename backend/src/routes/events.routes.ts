@@ -67,6 +67,21 @@ eventsRouter.post('/', requireAdminOnly, (req, res) => {
   );
 });
 
+// Copying is creating: Direction only. Same set-up and stock as the source, blank flow (no orders).
+eventsRouter.post('/:id/duplicate', requireAdminOnly, (req, res) => {
+  const { name } = (req.body ?? {}) as { name?: string };
+  handle(
+    req,
+    res,
+    () => {
+      const event = req.etablissement!.events.duplicate(req.params.id, name, req.user!.sub);
+      broadcastEvents(req.etablissementId!);
+      return req.etablissement!.events.get(event.id);
+    },
+    201,
+  );
+});
+
 eventsRouter.patch('/:id', requireRole('ADMIN'), requireOwnEventForManager, (req, res) => {
   const { name, description, serviceType, tableCount } = req.body ?? {};
   handle(req, res, () => {

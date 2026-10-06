@@ -2,9 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NextFunction, Request, Response, Router } from 'express';
 import multer from 'multer';
-import { isMailConfigured, isSmtpConfigured, notifyNewContactMessage, sendMail } from '../services/mail.service';
+import {
+  isMailConfigured,
+  isSmtpConfigured,
+  notifyNewContactMessage,
+  sendMail,
+  sendPinResetMail,
+  sendSubscriptionPurchaseMail,
+} from '../services/mail.service';
 import { config } from '../config';
-import { platform } from '../data/platform';
+import { SubscriptionStatus, platform } from '../data/platform';
 import { buildDemoSeed } from '../data/db';
 import { ContactMessageError, contactMessages } from '../data/contact-messages';
 import { ensureEtablissementContext, evictEtablissementContext } from '../data/etablissement-registry';
@@ -15,16 +22,18 @@ import {
   setFirebaseServiceAccount,
 } from '../data/firebase-admin';
 import { StorageBackend } from '../data/platform';
-import { PLAN_DAYS, SubscriptionPlan, subscriptions } from '../data/subscriptions';
+import { SubscriptionPlan, subscriptions } from '../data/subscriptions';
 import { deleteLibraryImage, etablissementUploadsDir, libraryImageUpload, listImageLibrary } from '../middleware/upload.middleware';
 import { broadcastUsers } from '../sockets/io';
 import { asyncHandler } from '../utils/async-handler';
+import bcrypt from 'bcryptjs';
+import { verifyToken } from '../services/auth.service';
 
 const ETABLISSEMENTS_DATA_ROOT = path.resolve(__dirname, '..', '..', 'data', 'etablissements');
 
 export const platformRouter = Router();
 
-function requirePlatformKey(req: Request, res: Response, next: NextFunction): void {
+export function requirePlatformKey(req: Request, res: Response, next: NextFunction): void {
   const key = req.header('x-platform-key');
   if (!key || key !== config.platformAdminKey) {
     res.status(401).json({ error: "Clé d'administration plateforme invalide." });
@@ -59,18 +68,76 @@ platformRouter.get('/etablissements/:id/subscription-status', (req, res) => {
 
 /** Public — informational pricing shown on the subscription/token screen (no online payment yet). */
 platformRouter.get('/subscription-plans', (_req, res) => {
-  res.json(subscriptions.getPricing());
+  res.json(subscriptions.activePlans());
 });
 
-const PLAN_VALUES: SubscriptionPlan[] = ['TWO_DAYS', 'WEEK', 'MONTH', 'YEAR'];
-const PLAN_VALUES_LABEL = "'TWO_DAYS', 'WEEK', 'MONTH' ou 'YEAR'";
+/**
+ * Only the Direction subscribes: either signed in as this établissement's ADMIN (Bearer token, in the app),
+ * or — on the subscription gate, before anyone can sign in — by giving a Direction account's PIN.
+ */
+/** Wrong Direction PINs per établissement: 5 in a row lock PIN checks for 10 minutes (a 4-digit PIN is
+ * otherwise quick to guess from the public subscription screens). */
+const PIN_MAX_FAILURES = 5;
+const PIN_LOCK_MS = 10 * 60 * 1000;
+const pinFailures = new Map<string, { count: number; lockedUntil: number }>();
+
+export class DirectionPinError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+/**
+ * Checks a Direction (active ADMIN) PIN of the établissement. Returns the Direction account's name, or
+ * null for a wrong PIN; throws DirectionPinError (429) while locked after too many wrong PINs.
+ */
+export async function checkDirectionPin(etablissementId: string, pin: string): Promise<string | null> {
+  const entry = pinFailures.get(etablissementId);
+  if (entry && entry.lockedUntil > Date.now()) {
+    const minutes = Math.ceil((entry.lockedUntil - Date.now()) / 60000);
+    throw new DirectionPinError(`Trop de codes erronés : réessayez dans ${minutes} min.`, 429);
+  }
+  if (!/^\d{4}$/.test(pin)) return null;
+  const context = await ensureEtablissementContext(etablissementId).catch(() => undefined);
+  const user = context?.db.data.users.find((u) => u.role === 'ADMIN' && !u.suspended && bcrypt.compareSync(pin, u.pinHash));
+  if (user) {
+    pinFailures.delete(etablissementId);
+    return user.name;
+  }
+  const count = (entry && entry.lockedUntil <= Date.now() && entry.count >= PIN_MAX_FAILURES ? 0 : (entry?.count ?? 0)) + 1;
+  pinFailures.set(etablissementId, { count, lockedUntil: count >= PIN_MAX_FAILURES ? Date.now() + PIN_LOCK_MS : 0 });
+  return null;
+}
+
+async function isDirection(req: Request, etablissementId: string): Promise<boolean> {
+  const bearer = req.header('authorization')?.replace(/^Bearer\s+/i, '');
+  const payload = bearer ? verifyToken(bearer) : null;
+  if (payload && payload.role === 'ADMIN' && payload.etablissementId === etablissementId) return true;
+  const pin = String((req.body as { adminPin?: unknown })?.adminPin ?? '').trim();
+  if (!pin) return false;
+  return (await checkDirectionPin(etablissementId, pin)) !== null;
+}
+
+const DIRECTION_ONLY = "Seule la direction peut s'abonner : connectez-vous avec un compte Direction ou saisissez son code PIN.";
 
 /** Public — an établissement's own staff redeem a token here to unlock/extend access, no platform key needed. */
-platformRouter.post('/etablissements/:id/subscription/redeem', (req, res) => {
+platformRouter.post('/etablissements/:id/subscription/redeem', asyncHandler(async (req, res) => {
   const meta = platform.findEtablissement(req.params.id);
   if (!meta) {
     res.status(404).json({ error: "Identifiant d'établissement inconnu." });
     return;
+  }
+  try {
+    if (!(await isDirection(req, meta.id))) {
+      res.status(403).json({ error: DIRECTION_ONLY });
+      return;
+    }
+  } catch (err) {
+    if (err instanceof DirectionPinError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
   }
   const { tokenCode } = req.body as { tokenCode?: string };
   if (!tokenCode?.trim()) {
@@ -79,19 +146,140 @@ platformRouter.post('/etablissements/:id/subscription/redeem', (req, res) => {
   }
   try {
     const token = subscriptions.redeemToken(tokenCode, meta.id);
+    const def = subscriptions.findPlan(token.plan);
     const status = platform.extendSubscription(meta.id, {
       source: 'TOKEN',
       plan: token.plan,
-      days: PLAN_DAYS[token.plan],
+      days: subscriptions.daysFor(token),
       tokenCode: token.code,
+      planLabel: token.planLabel ?? def?.label,
+      durationLabel: def ? subscriptions.durationLabel(def) : undefined,
     });
     res.json(status);
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Token invalide.' });
   }
-});
+}));
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Public — « Payer en ligne » from the subscription screen (gate or in-app). The online payment is still
+ * SIMULATED: this creates a token for the chosen plan, redeems it for the établissement straight away and
+ * e-mails it to the Direction's address. Until a real payment provider is plugged in, anyone reaching
+ * this screen can activate a plan without paying.
+ */
+export const ONLINE_PAYMENT_OFF = 'Le paiement en ligne est momentanément indisponible : demandez votre token par e-mail.';
+
+export interface KalyPurchaseResult {
+  status: SubscriptionStatus;
+  tokenCode: string;
+  plan: string;
+  emailedTo: string | null;
+  emailError: string | null;
+}
+
+/** Thrown by kalyPurchase — the HTTP status and message to answer with. */
+export class PurchaseError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+/**
+ * Kaly Manager's online purchase (subscription screen, gate, or the token-manager's public page). Payment is
+ * still SIMULATED: the Direction check stands in for it. Creates a token for the plan, redeems it for the
+ * établissement straight away, extends its access and e-mails the token with a recap.
+ */
+export async function kalyPurchase(
+  req: Request,
+  etablissementId: string,
+  plan: string | undefined,
+  email: string | undefined,
+): Promise<KalyPurchaseResult> {
+  if (!config.onlinePayment) throw new PurchaseError(ONLINE_PAYMENT_OFF, 403);
+  const meta = platform.findEtablissement(etablissementId);
+  if (!meta) throw new PurchaseError("Identifiant d'établissement inconnu.", 404);
+  let direction: boolean;
+  try {
+    direction = await isDirection(req, meta.id);
+  } catch (err) {
+    if (err instanceof DirectionPinError) throw new PurchaseError(err.message, err.status);
+    throw err;
+  }
+  if (!direction) throw new PurchaseError(DIRECTION_ONLY, 403);
+  const def = plan ? subscriptions.findPlan(plan) : undefined;
+  if (!def || !def.active) throw new PurchaseError('Formule indisponible.', 400);
+  // The token and the receipt go to the établissement's e-mail — asked for here when none is on file yet.
+  if (!meta.adminEmail) {
+    const given = email?.trim();
+    if (!given || !EMAIL_RE.test(given)) {
+      throw new PurchaseError("Indiquez l'adresse e-mail de l'établissement : le token y sera envoyé.", 400);
+    }
+    platform.setAdminEmail(meta.id, given);
+  }
+  const to = platform.findEtablissement(meta.id)!.adminEmail!;
+
+  const [token] = subscriptions.generateTokens(def.id, 1, true, `Paiement en ligne (simulé) — ${meta.name}`);
+  subscriptions.redeemToken(token.code, meta.id);
+  const status = platform.extendSubscription(meta.id, {
+    source: 'TOKEN',
+    plan: def.id,
+    days: subscriptions.daysFor(token),
+    tokenCode: token.code,
+    planLabel: def.label,
+    durationLabel: subscriptions.durationLabel(def),
+    price: def.price,
+    purchase: true,
+  });
+
+  let emailedTo: string | null = null;
+  let emailError: string | null = null;
+  if (isSmtpConfigured()) {
+    const origin = req.get('origin');
+    try {
+      await sendSubscriptionPurchaseMail(to, {
+        etablissementName: meta.name,
+        etablissementId: meta.id,
+        planLabel: def.label,
+        duration: subscriptions.durationLabel(def),
+        price: def.price,
+        tokenCode: token.code,
+        purchasedAt: new Date(),
+        accessUntil: new Date(status.accessUntil),
+        link: origin ? `${origin}/etablissement/${meta.id}` : undefined,
+      });
+      emailedTo = to;
+    } catch (err) {
+      emailError = "L'e-mail n'a pas pu être envoyé.";
+      console.error('Envoi du token par e-mail impossible :', err instanceof Error ? err.message : err);
+    }
+  } else {
+    emailError = "L'envoi d'e-mails n'est pas configuré sur le serveur.";
+  }
+  return { status, tokenCode: token.code, plan: def.label, emailedTo, emailError };
+}
+
+/**
+ * Public — « Payer en ligne » from the subscription screen (gate or in-app). The online payment is still
+ * SIMULATED (see kalyPurchase): until a real payment provider is plugged in, the Direction can activate a
+ * plan without paying.
+ */
+platformRouter.post(
+  '/etablissements/:id/subscription/purchase',
+  asyncHandler(async (req, res) => {
+    const { plan, email } = req.body as { plan?: SubscriptionPlan; email?: string };
+    try {
+      res.json(await kalyPurchase(req, req.params.id, plan, email));
+    } catch (err) {
+      if (err instanceof PurchaseError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
 
 /** Public — the "need help" contact form on the établissement-connection screen, reachable before any key exists. */
 platformRouter.post('/contact', (req, res) => {
@@ -286,9 +474,8 @@ platformRouter.post(
  */
 platformRouter.post('/etablissements/test-base', (_req, res) => {
   const meta = platform.createEtablissement('Établissement de Test (toutes les rôles)', 'Admin Test');
+  // Protected = standing sandbox, never gated behind a subscription (see statusFor).
   platform.setProtected(meta.id, true);
-  // Standing sandbox — never gated behind a subscription.
-  platform.extendSubscription(meta.id, { source: 'ADMIN', days: 365 * 100 });
 
   const dbPath = path.join(ETABLISSEMENTS_DATA_ROOT, meta.id, 'db.json');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -349,7 +536,9 @@ platformRouter.post(
       res.status(404).json({ error: "Identifiant d'établissement inconnu." });
       return;
     }
-    const adminUser = context.db.data.users.find((u) => u.role === 'ADMIN');
+    // The founding Direction account: the first active ADMIN (else the first ADMIN at all).
+    const admins = context.db.data.users.filter((u) => u.role === 'ADMIN');
+    const adminUser = admins.find((u) => !u.suspended) ?? admins[0];
     if (!adminUser) {
       res.status(404).json({ error: 'Aucun compte administrateur trouvé pour cet établissement.' });
       return;
@@ -357,7 +546,34 @@ platformRouter.post(
     const pinCode = generateRandomPin();
     const updated = context.users.resetPin(adminUser.id, pinCode);
     broadcastUsers(context.id);
-    res.json({ userId: updated.id, userName: updated.name, pinCode });
+    // A fresh PIN: wrong guesses of the old one no longer lock the Direction out.
+    pinFailures.delete(context.id);
+
+    // The provisional PIN goes to the établissement's e-mail (the Direction).
+    const meta = platform.findEtablissement(context.id);
+    let emailedTo: string | null = null;
+    let emailError: string | null = null;
+    if (!meta?.adminEmail) {
+      emailError = "Aucun e-mail n'est enregistré pour cet établissement.";
+    } else if (!isSmtpConfigured()) {
+      emailError = "L'envoi d'e-mails n'est pas configuré sur le serveur.";
+    } else {
+      const origin = req.get('origin');
+      try {
+        await sendPinResetMail(meta.adminEmail, {
+          etablissementName: meta.name,
+          etablissementId: meta.id,
+          userName: updated.name,
+          pinCode,
+          link: origin ? `${origin}/etablissement/${meta.id}` : undefined,
+        });
+        emailedTo = meta.adminEmail;
+      } catch (err) {
+        emailError = "L'e-mail n'a pas pu être envoyé.";
+        console.error('Envoi du PIN provisoire impossible :', err instanceof Error ? err.message : err);
+      }
+    }
+    res.json({ userId: updated.id, userName: updated.name, pinCode, emailedTo, emailError });
   }),
 );
 
@@ -382,6 +598,7 @@ platformRouter.get(
           lastActivityAt: meta.lastActivityAt ?? null,
           storageBackend: meta.storageBackend ?? 'LOCAL',
           subscription: platform.subscriptionStatus(meta.id) ?? null,
+          accessPeriods: platform.accessPeriods(meta.id),
           userCount: context?.db.data.users.length ?? 0,
           orderCount: context?.db.data.orders.length ?? 0,
         };
@@ -487,52 +704,6 @@ platformRouter.patch(
   }),
 );
 
-/** Updates the platform-wide pricing shown on the subscription screen (informational — no payment processing yet). */
-platformRouter.put('/subscription-plans', (req, res) => {
-  const { TWO_DAYS, WEEK, MONTH, YEAR } = req.body as {
-    TWO_DAYS?: number;
-    WEEK?: number;
-    MONTH?: number;
-    YEAR?: number;
-  };
-  if ([TWO_DAYS, WEEK, MONTH, YEAR].some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
-    res.status(400).json({ error: 'TWO_DAYS, WEEK, MONTH et YEAR (nombres positifs) sont requis.' });
-    return;
-  }
-  res.json(subscriptions.setPricing({ TWO_DAYS: TWO_DAYS!, WEEK: WEEK!, MONTH: MONTH!, YEAR: YEAR! }));
-});
-
-platformRouter.get('/subscription-tokens', (_req, res) => {
-  res.json(subscriptions.listTokens());
-});
-
-/** Generates fresh, unused tokens for one plan — handed to an établissement to redeem on the gate screen. */
-platformRouter.post('/subscription-tokens', (req, res) => {
-  const { plan, count, paid, note } = req.body as { plan?: SubscriptionPlan; count?: number; paid?: boolean; note?: string };
-  if (!plan || !PLAN_VALUES.includes(plan)) {
-    res.status(400).json({ error: `plan doit être ${PLAN_VALUES_LABEL}.` });
-    return;
-  }
-  const n = Number(count ?? 1);
-  if (!Number.isInteger(n) || n < 1 || n > 100) {
-    res.status(400).json({ error: 'count doit être un entier entre 1 et 100.' });
-    return;
-  }
-  const created = subscriptions.generateTokens(plan, n, Boolean(paid), note);
-  res.status(201).json(created);
-});
-
-/** Removes a token's record entirely — used or not. Never touches the redeeming établissement's own
- * subscription access, which was already granted separately (see deleteToken). */
-platformRouter.delete('/subscription-tokens/:code', (req, res) => {
-  try {
-    subscriptions.deleteToken(req.params.code);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(409).json({ error: err instanceof Error ? err.message : 'Impossible de supprimer ce token.' });
-  }
-});
-
 /** Full subscription status + redemption history for one établissement — the platform admin's detail view. */
 platformRouter.get('/etablissements/:id/subscription', (req, res) => {
   const detail = platform.subscriptionDetail(req.params.id);
@@ -541,27 +712,6 @@ platformRouter.get('/etablissements/:id/subscription', (req, res) => {
     return;
   }
   res.json(detail);
-});
-
-/** Direct admin grant — bypasses tokens entirely (VIP accounts, goodwill extensions, the test sandbox). */
-platformRouter.post('/etablissements/:id/subscription/grant', (req, res) => {
-  const meta = platform.findEtablissement(req.params.id);
-  if (!meta) {
-    res.status(404).json({ error: "Identifiant d'établissement inconnu." });
-    return;
-  }
-  const { plan, days } = req.body as { plan?: SubscriptionPlan; days?: number };
-  let grantedDays: number;
-  if (typeof days === 'number' && Number.isFinite(days) && days > 0) {
-    grantedDays = Math.round(days);
-  } else if (plan && PLAN_VALUES.includes(plan)) {
-    grantedDays = PLAN_DAYS[plan];
-  } else {
-    res.status(400).json({ error: `Fournissez plan (${PLAN_VALUES_LABEL}) ou days (nombre de jours).` });
-    return;
-  }
-  const status = platform.extendSubscription(meta.id, { source: 'ADMIN', days: grantedDays, plan });
-  res.json(status);
 });
 
 /**

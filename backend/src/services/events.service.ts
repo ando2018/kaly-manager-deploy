@@ -74,6 +74,39 @@ export function createEventsService(db: IEtablissementDatabase) {
       });
     },
 
+    /**
+     * New évènement from an existing one: same service type, tables, description and team, and the stock
+     * exactly as the source shows it right now (quantity + « disponible à la vente » for every product).
+     * Orders and stock history belong to an évènement, so the copy starts with a blank flow.
+     */
+    duplicate(sourceId: string, name: string | undefined, createdBy?: string): RestaurantEvent {
+      return db.mutate((state) => {
+        const source = state.events.find((e) => e.id === sourceId);
+        if (!source) throw new EventError('Évènement introuvable.', 404);
+        const eventStock: Record<string, { stockQuantity: number; isAvailable: boolean }> = {};
+        for (const item of state.menu) {
+          const own = source.eventStock?.[item.id];
+          eventStock[item.id] = own
+            ? { stockQuantity: own.stockQuantity, isAvailable: own.isAvailable }
+            : { stockQuantity: item.stockQuantity, isAvailable: item.isAvailable };
+        }
+        const copy: RestaurantEvent = {
+          id: generateId('ev'),
+          name: name?.trim() || `${source.name} (copie)`,
+          description: source.description,
+          status: 'ACTIVE',
+          serviceType: source.serviceType ?? 'STANDARD',
+          tableCount: source.tableCount,
+          createdAt: new Date().toISOString(),
+          createdBy,
+          assignedUserIds: [...source.assignedUserIds],
+          eventStock,
+        };
+        state.events.push(copy);
+        return toPublic(copy);
+      });
+    },
+
     update(id: string, input: UpdateEventInput): RestaurantEvent {
       return db.mutate((state) => {
         const event = state.events.find((e) => e.id === id);

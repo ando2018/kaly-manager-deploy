@@ -18,4 +18,7 @@ export const config = {
   },
   /** Who receives the platform notifications (new contact message / token request). Comma-separated. */
   notifyEmail: process.env.NOTIFY_EMAIL?.trim() || undefined,
+  /** Online (card) payment on the subscription screens. Off = on standby: the screens send a token request
+   * by e-mail instead, and the purchase routes refuse. Set ONLINE_PAYMENT_ENABLED=true to bring it back. */
+  onlinePayment: process.env.ONLINE_PAYMENT_ENABLED === 'true',
 };

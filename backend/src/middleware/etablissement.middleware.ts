@@ -15,6 +15,9 @@ declare global {
 
 const HEADER = 'x-etablissement-id';
 
+/** Writes still allowed while consultation-only: signing in. */
+const READ_ONLY_ALLOWED_WRITES = ['/api/auth/login', '/api/auth/change-pin'];
+
 export const resolveEtablissement = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const raw = req.header(HEADER);
   if (!raw) {
@@ -38,15 +41,22 @@ export const resolveEtablissement = asyncHandler(async (req: Request, res: Respo
   }
 
   const meta = platform.findEtablissement(context.id);
-  if (meta?.archived) {
-    res.status(403).json({ error: 'archived' });
-    return;
-  }
-
   const subscription = platform.subscriptionStatus(context.id);
-  if (subscription && !subscription.active) {
-    res.status(403).json({ error: 'subscription_expired' });
-    return;
+  if (subscription?.readOnly) {
+    // Lapsed subscription: consultation only — reads, signing in, nothing that records anything.
+    if (req.method !== 'GET' && !READ_ONLY_ALLOWED_WRITES.some((path) => req.originalUrl.startsWith(path))) {
+      res.status(403).json({ error: 'subscription_readonly' });
+      return;
+    }
+  } else {
+    if (meta?.archived) {
+      res.status(403).json({ error: 'archived' });
+      return;
+    }
+    if (subscription && !subscription.active) {
+      res.status(403).json({ error: 'subscription_expired' });
+      return;
+    }
   }
 
   platform.touchActivity(context.id);
