@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { PlatformDocStore } from './platform-doc-store';
+import { config } from '../config';
+import { MirroredCollection, StringIdDoc, TOKEN_COLLECTIONS, ensureTokenCollections, readLegacyTokenDocs, tokensDb } from './token-store';
 
 /** A plan's id — the plans themselves are a platform setting (see SubscriptionPlanDef), not a fixed list. */
 export type SubscriptionPlan = string;
@@ -112,31 +111,71 @@ interface TokensShape {
   tokens: SubscriptionToken[];
 }
 
-const PRICING_PATH = path.resolve(__dirname, '..', '..', 'data', 'subscription-pricing.json');
-const TOKENS_PATH = path.resolve(__dirname, '..', '..', 'data', 'subscription-tokens.json');
 const TOKEN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I
 
-let pricingStore: PlatformDocStore<PricingShape> | undefined;
-let tokensStore: PlatformDocStore<TokensShape> | undefined;
+// In memory (read synchronously everywhere), written through to the token-manager's database (token-store.ts).
+let pricing: PricingShape | undefined;
+let tokensData: TokensShape | undefined;
+let appsMirror: MirroredCollection<TokenApp>;
+let plansMirror: MirroredCollection<SubscriptionPlanDef & { appId: string; position: number }>;
+let tokensMirror: MirroredCollection<SubscriptionToken>;
 
-/** Migrates any pre-existing local pricing/tokens JSON into the platform's Firestore project on first boot. Must resolve before any other export here is called. */
+/**
+ * Loads applications, plans and tokens from the token-manager's MongoDB database (collections apps,
+ * plans, tokens). The first time (empty database), they are copied from the app database's former
+ * « subscription-pricing » / « subscription-tokens » documents. Must resolve before any other export
+ * here is called.
+ */
 export async function initSubscriptionsStore(): Promise<void> {
-  pricingStore = await PlatformDocStore.create<PricingShape>('subscription-pricing', () => {
-    if (fs.existsSync(PRICING_PATH)) return JSON.parse(fs.readFileSync(PRICING_PATH, 'utf-8')) as PricingShape;
-    return { plans: defaultPlans() };
-  });
-  if (fs.existsSync(PRICING_PATH)) fs.renameSync(PRICING_PATH, `${PRICING_PATH}.migrated`);
+  await ensureTokenCollections();
+  const db = tokensDb();
+  appsMirror = new MirroredCollection<TokenApp>(db.collection<StringIdDoc>(TOKEN_COLLECTIONS.apps), ({ id, plans: _plans, ...rest }) => ({ _id: id, ...rest }));
+  plansMirror = new MirroredCollection(db.collection<StringIdDoc>(TOKEN_COLLECTIONS.plans), (p) => ({ _id: `${p.appId}:${p.id}`, ...p }));
+  tokensMirror = new MirroredCollection<SubscriptionToken>(db.collection<StringIdDoc>(TOKEN_COLLECTIONS.tokens), (t) => ({ _id: t.code, ...t }));
 
-  tokensStore = await PlatformDocStore.create<TokensShape>('subscription-tokens', () => {
-    if (fs.existsSync(TOKENS_PATH)) return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf-8')) as TokensShape;
-    return { tokens: [] };
-  });
-  if (fs.existsSync(TOKENS_PATH)) fs.renameSync(TOKENS_PATH, `${TOKENS_PATH}.migrated`);
+  const appDocs = await db.collection(TOKEN_COLLECTIONS.apps).find().toArray();
+  const planDocs = await db.collection(TOKEN_COLLECTIONS.plans).find().sort({ position: 1 }).toArray();
+  const tokenDocs = await db.collection(TOKEN_COLLECTIONS.tokens).find().toArray();
+
+  if (appDocs.length || tokenDocs.length) {
+    const apps = appDocs.map(({ _id, ...rest }) => ({ ...(rest as Omit<TokenApp, 'id' | 'plans'>), id: String(_id), plans: [] as SubscriptionPlanDef[] }));
+    for (const doc of planDocs) {
+      const { _id, appId, position: _position, ...plan } = doc;
+      apps.find((a) => a.id === appId)?.plans.push(plan as unknown as SubscriptionPlanDef);
+    }
+    pricing = { apps };
+    tokensData = { tokens: tokenDocs.map(({ _id, ...rest }) => rest as unknown as SubscriptionToken) };
+    appsMirror.markLoaded(apps);
+    plansMirror.markLoaded(flattenPlans(apps));
+    tokensMirror.markLoaded(tokensData.tokens);
+    return;
+  }
+
+  // Empty token database: take over what the app database held until now (kept there as a backup).
+  const legacy = await readLegacyTokenDocs<PricingShape, TokensShape>();
+  pricing = legacy.pricing ?? { plans: defaultPlans() };
+  tokensData = { tokens: legacy.tokens?.tokens ?? [] };
+  loadApps(); // builds the Kaly Manager app from legacy plans when needed
+  await Promise.all([savePricingNow(), tokensMirror.sync(tokensData.tokens)]);
+  if (legacy.pricing || legacy.tokens) {
+    console.log(
+      `MongoDB : ${pricing.apps?.length ?? 0} application(s) et ${tokensData.tokens.length} token(s) copiés dans « ${config.mongo.tokensDbName} ».`,
+    );
+  }
+}
+
+function flattenPlans(apps: TokenApp[]): (SubscriptionPlanDef & { appId: string; position: number })[] {
+  return apps.flatMap((a) => a.plans.map((p, position) => ({ ...p, appId: a.id, position })));
+}
+
+function savePricingNow(): Promise<void> {
+  const apps = pricing?.apps ?? [];
+  return Promise.all([appsMirror.sync(apps), plansMirror.sync(flattenPlans(apps))]).then(() => undefined);
 }
 
 function loadPricing(): PricingShape {
-  if (!pricingStore) throw new Error('Subscriptions store not initialized — call initSubscriptionsStore() at server boot.');
-  return pricingStore.data;
+  if (!pricing) throw new Error('Subscriptions store not initialized — call initSubscriptionsStore() at server boot.');
+  return pricing;
 }
 
 /** Every application; Kaly Manager is created from the existing plans (or defaults) the first time. */
@@ -175,16 +214,16 @@ export function tokenAppId(token: Pick<SubscriptionToken, 'appId'>): string {
 }
 
 function savePricing(_data: PricingShape): void {
-  pricingStore!.touch();
+  void savePricingNow();
 }
 
 function loadTokens(): TokensShape {
-  if (!tokensStore) throw new Error('Subscriptions store not initialized — call initSubscriptionsStore() at server boot.');
-  return tokensStore.data;
+  if (!tokensData) throw new Error('Subscriptions store not initialized — call initSubscriptionsStore() at server boot.');
+  return tokensData;
 }
 
-function saveTokens(_data: TokensShape): void {
-  tokensStore!.touch();
+function saveTokens(data: TokensShape): void {
+  void tokensMirror.sync(data.tokens);
 }
 
 function randomGroup(length: number): string {

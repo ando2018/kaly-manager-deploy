@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { PlatformDocStore } from './platform-doc-store';
 import { generateId } from '../utils/id';
 
@@ -38,21 +36,12 @@ interface ContactMessagesShape {
   messages: ContactMessage[];
 }
 
-const CONTACT_MESSAGES_PATH = path.resolve(__dirname, '..', '..', 'data', 'contact-messages.json');
 
 let store: PlatformDocStore<ContactMessagesShape> | undefined;
 
-/** Migrates any pre-existing local contact-messages.json into the platform's Firestore project on first boot. Must resolve before any other export here is called. */
+/** Loads the contact messages from MongoDB. Must resolve before any other export here is called. */
 export async function initContactMessagesStore(): Promise<void> {
-  store = await PlatformDocStore.create<ContactMessagesShape>('contact-messages', () => {
-    if (fs.existsSync(CONTACT_MESSAGES_PATH)) {
-      return JSON.parse(fs.readFileSync(CONTACT_MESSAGES_PATH, 'utf-8')) as ContactMessagesShape;
-    }
-    return { messages: [] };
-  });
-  if (fs.existsSync(CONTACT_MESSAGES_PATH)) {
-    fs.renameSync(CONTACT_MESSAGES_PATH, `${CONTACT_MESSAGES_PATH}.migrated`);
-  }
+  store = await PlatformDocStore.create<ContactMessagesShape>('contact-messages', () => ({ messages: [] }));
 }
 
 function load(): ContactMessagesShape {

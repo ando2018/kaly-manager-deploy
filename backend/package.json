@@ -5,8 +5,10 @@
   "type": "commonjs",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "migrate:mongo": "node dist/scripts/migrate-to-mongo.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -15,6 +17,7 @@
     "express": "^4.19.2",
     "firebase-admin": "^14.4.0",
     "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.21.0",
     "multer": "^2.4.0",
     "nodemailer": "^10.0.10",
     "socket.io": "^4.7.5",

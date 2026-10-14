@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { Counters, DbShape, LegacyDbShape, MenuItem, Order, User } from '../models/types';
 import { generateId } from '../utils/id';
@@ -346,60 +344,10 @@ export function migrate(data: DbShape): boolean {
 }
 
 /**
- * Storage-backend-agnostic surface every service depends on — implemented by `JsonDatabase`
- * (local file) and `FirestoreDatabase` (cloud), so services never know which one they're using.
+ * The surface every service depends on — implemented by `MongoDatabase` (one MongoDB document per
+ * établissement, kept in memory and written through).
  */
 export interface IEtablissementDatabase {
   readonly data: DbShape;
   mutate<T>(fn: (state: DbShape) => T): T;
-}
-
-export class JsonDatabase implements IEtablissementDatabase {
-  private state: DbShape;
-  private writeQueue: Promise<void> = Promise.resolve();
-
-  constructor(
-    private readonly dbPath: string,
-    seedFn: () => DbShape,
-  ) {
-    this.state = this.load(seedFn);
-  }
-
-  private load(seedFn: () => DbShape): DbShape {
-    fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
-    if (!fs.existsSync(this.dbPath)) {
-      const seed = seedFn();
-      fs.writeFileSync(this.dbPath, JSON.stringify(seed, null, 2), 'utf-8');
-      return seed;
-    }
-    const raw = fs.readFileSync(this.dbPath, 'utf-8');
-    const data = JSON.parse(raw) as DbShape;
-    if (migrate(data)) {
-      fs.writeFileSync(this.dbPath, JSON.stringify(data, null, 2), 'utf-8');
-    }
-    return data;
-  }
-
-  private persist(): void {
-    this.writeQueue = this.writeQueue.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          fs.writeFile(this.dbPath, JSON.stringify(this.state, null, 2), 'utf-8', (err) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        }),
-    );
-  }
-
-  get data(): DbShape {
-    return this.state;
-  }
-
-  /** Mutate the in-memory state and persist to disk. */
-  mutate<T>(fn: (state: DbShape) => T): T {
-    const result = fn(this.state);
-    this.persist();
-    return result;
-  }
 }

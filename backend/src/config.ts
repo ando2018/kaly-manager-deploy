@@ -10,6 +10,14 @@ const envLoaded = fs.existsSync(ENV_FILE) && !dotenv.config({ path: ENV_FILE }).
 if (!envLoaded) console.warn(`Fichier de configuration introuvable : ${ENV_FILE} — valeurs par défaut utilisées.`);
 
 export const config = {
+  /** MongoDB (everything: platform + établissements) — set MONGODB_URI to use it, e.g.
+   * mongodb://kaly:<mot de passe>@localhost:27017/kaly_manager?authSource=kaly_manager */
+  mongo: {
+    uri: process.env.MONGODB_URI?.trim() || undefined,
+    dbName: process.env.MONGODB_DB?.trim() || 'kaly_manager',
+    /** The token-manager's own database (applications, plans, tokens) — same MongoDB server. */
+    tokensDbName: process.env.MONGODB_TOKENS_DB?.trim() || 'token_manager',
+  },
   /** Where Kaly Manager is served (the site root leads to the subscription page, /tokens/). */
   kalyAppPath: '/km',
   /** Whether backend/.env was found and read at startup (shown in /ap). */

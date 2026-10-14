@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
+import { ETABLISSEMENTS_COLLECTION, deleteDoc } from '../data/mongo';
+import { MongoDatabase } from '../data/mongo-db';
 import { NextFunction, Request, Response, Router } from 'express';
 import multer from 'multer';
 import {
@@ -15,13 +16,6 @@ import { SubscriptionStatus, platform } from '../data/platform';
 import { buildDemoSeed } from '../data/db';
 import { ContactMessageError, contactMessages } from '../data/contact-messages';
 import { ensureEtablissementContext, evictEtablissementContext } from '../data/etablissement-registry';
-import {
-  clearFirebaseServiceAccount,
-  getFirebaseProjectId,
-  isFirebaseConfigured,
-  setFirebaseServiceAccount,
-} from '../data/firebase-admin';
-import { StorageBackend } from '../data/platform';
 import { SubscriptionPlan, subscriptions } from '../data/subscriptions';
 import { deleteLibraryImage, etablissementUploadsDir, libraryImageUpload, listImageLibrary } from '../middleware/upload.middleware';
 import { broadcastUsers } from '../sockets/io';
@@ -29,7 +23,6 @@ import { asyncHandler } from '../utils/async-handler';
 import bcrypt from 'bcryptjs';
 import { verifyToken } from '../services/auth.service';
 
-const ETABLISSEMENTS_DATA_ROOT = path.resolve(__dirname, '..', '..', 'data', 'etablissements');
 
 export const platformRouter = Router();
 
@@ -485,17 +478,16 @@ platformRouter.post(
  * role (WAITER/KITCHEN/CASHIER/ADMIN/COMPTOIR) — a standing sandbox for testing, never wiped out by
  * one-by-one cleanup elsewhere on the platform.
  */
-platformRouter.post('/etablissements/test-base', (_req, res) => {
-  const meta = platform.createEtablissement('Établissement de Test (toutes les rôles)', 'Admin Test');
-  // Protected = standing sandbox, never gated behind a subscription (see statusFor).
-  platform.setProtected(meta.id, true);
-
-  const dbPath = path.join(ETABLISSEMENTS_DATA_ROOT, meta.id, 'db.json');
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  fs.writeFileSync(dbPath, JSON.stringify(buildDemoSeed(), null, 2));
-
-  res.status(201).json(platform.findEtablissement(meta.id));
-});
+platformRouter.post(
+  '/etablissements/test-base',
+  asyncHandler(async (_req, res) => {
+    const meta = platform.createEtablissement('Établissement de Test (toutes les rôles)', 'Admin Test');
+    // Protected = standing sandbox, never gated behind a subscription (see statusFor).
+    platform.setProtected(meta.id, true);
+    await MongoDatabase.importData(meta.id, buildDemoSeed());
+    res.status(201).json(platform.findEtablissement(meta.id));
+  }),
+);
 
 /** Permanently deletes exactly this établissement (data + uploads) — refused for protected ones. */
 platformRouter.delete(
@@ -512,8 +504,7 @@ platformRouter.delete(
     }
 
     evictEtablissementContext(meta.id);
-    await clearFirebaseServiceAccount(meta.id);
-    fs.rmSync(path.join(ETABLISSEMENTS_DATA_ROOT, meta.id), { recursive: true, force: true });
+    await deleteDoc(ETABLISSEMENTS_COLLECTION, meta.id);
     fs.rmSync(etablissementUploadsDir(meta.id), { recursive: true, force: true });
     subscriptions.deleteTokensUsedBy(meta.id);
     platform.remove(meta.id);
@@ -609,7 +600,6 @@ platformRouter.get(
           protected: meta.protected ?? false,
           createdAt: meta.createdAt,
           lastActivityAt: meta.lastActivityAt ?? null,
-          storageBackend: meta.storageBackend ?? 'LOCAL',
           subscription: platform.subscriptionStatus(meta.id) ?? null,
           accessPeriods: platform.accessPeriods(meta.id),
           userCount: context?.db.data.users.length ?? 0,
@@ -618,102 +608,6 @@ platformRouter.get(
       }),
     );
     res.json(overview);
-  }),
-);
-
-/** This établissement's Firebase configuration status — never returns the credential itself. */
-platformRouter.get('/etablissements/:id/firebase-config', (req, res) => {
-  const meta = platform.findEtablissement(req.params.id);
-  if (!meta) {
-    res.status(404).json({ error: "Identifiant d'établissement inconnu." });
-    return;
-  }
-  res.json({ configured: isFirebaseConfigured(meta.id), projectId: getFirebaseProjectId(meta.id) ?? null });
-});
-
-/**
- * Stores (and connection-tests) this établissement's own Firebase service-account key. Two
- * établissements may paste the same key — they'll share the underlying Firebase project but stay
- * isolated in their own Firestore document, same as two LOCAL établissements each get their own
- * db.json.
- */
-platformRouter.put(
-  '/etablissements/:id/firebase-config',
-  asyncHandler(async (req, res) => {
-    const meta = platform.findEtablissement(req.params.id);
-    if (!meta) {
-      res.status(404).json({ error: "Identifiant d'établissement inconnu." });
-      return;
-    }
-    const { serviceAccountJson } = req.body as { serviceAccountJson?: string };
-    if (!serviceAccountJson?.trim()) {
-      res.status(400).json({ error: 'serviceAccountJson est requis.' });
-      return;
-    }
-    try {
-      const { projectId } = await setFirebaseServiceAccount(meta.id, serviceAccountJson);
-      res.json({ configured: true, projectId });
-    } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Configuration Firebase invalide.' });
-    }
-  }),
-);
-
-/** Removes this établissement's Firebase configuration — refused while it's still the active backend. */
-platformRouter.delete(
-  '/etablissements/:id/firebase-config',
-  asyncHandler(async (req, res) => {
-    const meta = platform.findEtablissement(req.params.id);
-    if (!meta) {
-      res.status(404).json({ error: "Identifiant d'établissement inconnu." });
-      return;
-    }
-    if (meta.storageBackend === 'FIRESTORE') {
-      res.status(409).json({ error: "Cet établissement utilise encore Firestore. Repassez-le en local d'abord." });
-      return;
-    }
-    await clearFirebaseServiceAccount(meta.id);
-    res.json({ configured: false });
-  }),
-);
-
-/** Switches one établissement's storage backend. Switching to Firestore requires that établissement's own Firebase config and starts it fresh there (no automatic copy of its local data). */
-platformRouter.patch(
-  '/etablissements/:id/storage',
-  asyncHandler(async (req, res) => {
-    const { backend } = req.body as { backend?: StorageBackend };
-    if (backend !== 'LOCAL' && backend !== 'FIRESTORE') {
-      res.status(400).json({ error: "backend doit être 'LOCAL' ou 'FIRESTORE'." });
-      return;
-    }
-    const meta = platform.findEtablissement(req.params.id);
-    if (!meta) {
-      res.status(404).json({ error: "Identifiant d'établissement inconnu." });
-      return;
-    }
-    if (backend === 'FIRESTORE' && !isFirebaseConfigured(meta.id)) {
-      res.status(409).json({ error: "Configurez d'abord Firebase pour cet établissement." });
-      return;
-    }
-    if ((meta.storageBackend ?? 'LOCAL') === backend) {
-      res.json(meta);
-      return;
-    }
-
-    evictEtablissementContext(meta.id);
-    const updated = platform.setStorageBackend(meta.id, backend);
-
-    // Warm the new backend immediately so a bad Firestore connection surfaces here, not on the next café order.
-    try {
-      await ensureEtablissementContext(meta.id);
-    } catch (err) {
-      evictEtablissementContext(meta.id);
-      platform.setStorageBackend(meta.id, meta.storageBackend ?? 'LOCAL');
-      res.status(502).json({ error: err instanceof Error ? err.message : 'Échec de connexion au nouveau backend.' });
-      return;
-    }
-
-    res.json(updated);
   }),
 );
 

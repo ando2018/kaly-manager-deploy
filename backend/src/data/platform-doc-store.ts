@@ -1,12 +1,10 @@
-import { getPlatformFirestore } from './platform-firebase';
-
-const COLLECTION = 'platform-admin';
+import { PLATFORM_COLLECTION, readDoc, writeDoc } from './mongo';
 
 /**
- * Whole-document Firestore store — same "cache the whole blob in memory, sync reads, async
- * debounced write-through" model as FirestoreDatabase, so the platform.ts/subscriptions.ts/
- * contact-messages.ts call sites (all synchronous today) don't need to become async. Only the
- * one-time `create()` at server boot is awaited.
+ * Whole-document store for the platform data (établissements list, subscription plans & tokens,
+ * contact messages), in MongoDB's `platform` collection — "cache the whole blob in memory, sync reads,
+ * async write-through", so the platform.ts/subscriptions.ts/contact-messages.ts call sites (all
+ * synchronous) don't need to become async. Only the one-time `create()` at server boot is awaited.
  */
 export class PlatformDocStore<T> {
   private state: T;
@@ -14,26 +12,18 @@ export class PlatformDocStore<T> {
 
   private constructor(
     private readonly docId: string,
-    private readonly docRef: FirebaseFirestore.DocumentReference,
     initialState: T,
   ) {
     this.state = initialState;
   }
 
-  /**
-   * Loads the doc if it exists; otherwise seeds it with `seedFn()` (which the caller uses to
-   * migrate any pre-existing local JSON file's content on the very first boot after switching to
-   * Firestore, instead of starting empty).
-   */
+  /** Loads the doc if it exists; otherwise creates it with `seedFn()`. */
   static async create<T>(docId: string, seedFn: () => T): Promise<PlatformDocStore<T>> {
-    const ref = getPlatformFirestore().collection(COLLECTION).doc(docId);
-    const snap = await ref.get();
-    if (snap.exists) {
-      return new PlatformDocStore(docId, ref, snap.data() as T);
-    }
+    const stored = await readDoc<T>(PLATFORM_COLLECTION, docId);
+    if (stored !== undefined) return new PlatformDocStore<T>(docId, stored as T);
     const seed = seedFn();
-    await ref.set(sanitize(seed) as FirebaseFirestore.DocumentData);
-    return new PlatformDocStore(docId, ref, seed);
+    await writeDoc(PLATFORM_COLLECTION, docId, seed);
+    return new PlatformDocStore<T>(docId, seed);
   }
 
   get data(): T {
@@ -52,18 +42,13 @@ export class PlatformDocStore<T> {
   }
 
   private persist(): void {
-    const snapshot = sanitize(this.state);
+    const snapshot = JSON.parse(JSON.stringify(this.state)) as T;
     this.writeQueue = this.writeQueue.then(async () => {
       try {
-        await this.docRef.set(snapshot as FirebaseFirestore.DocumentData);
+        await writeDoc(PLATFORM_COLLECTION, this.docId, snapshot);
       } catch (err) {
-        console.error(`Échec de l'écriture Firestore (plateforme/${this.docId}):`, err);
+        console.error(`Échec de l'écriture MongoDB (plateforme/${this.docId}):`, err);
       }
     });
   }
-}
-
-/** Firestore rejects `undefined` field values — this drops them exactly like JSON.stringify did for the local file backend, keeping semantics identical. */
-function sanitize<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
 }

@@ -20,7 +20,7 @@ export function initSockets(httpServer: HttpServer): SocketIOServer {
   io.on('connection', async (socket) => {
     const etablissementId = etablissementIdFromSocket(socket);
     // A rejection here would be unhandled (async event listener) and take the whole server down —
-    // e.g. one établissement set to Firestore without its service-account key.
+    // e.g. MongoDB unreachable.
     const context = etablissementId
       ? await ensureEtablissementContext(etablissementId).catch((err) => {
           console.error(`Socket refusé pour l'établissement ${etablissementId} :`, err instanceof Error ? err.message : err);

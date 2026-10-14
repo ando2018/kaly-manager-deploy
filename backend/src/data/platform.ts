@@ -1,9 +1,6 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { PlatformDocStore } from './platform-doc-store';
 import { SubscriptionPlan, TRIAL_DAYS, subscriptions } from './subscriptions';
 
-export type StorageBackend = 'LOCAL' | 'FIRESTORE';
 
 export interface SubscriptionEvent {
   at: string;
@@ -61,8 +58,6 @@ export interface EtablissementMeta {
   lastActivityAt?: string;
   /** Standing test sandbox — exempt from the one-by-one delete action on the platform admin screen. */
   protected?: boolean;
-  /** Defaults to LOCAL (db.json on disk) when absent. */
-  storageBackend?: StorageBackend;
   subscription?: SubscriptionState;
 }
 
@@ -70,25 +65,14 @@ interface PlatformShape {
   etablissements: EtablissementMeta[];
 }
 
-const PLATFORM_PATH = path.resolve(__dirname, '..', '..', 'data', 'platform.json');
 const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I — avoids ambiguity when typed by hand
 
 let store: PlatformDocStore<PlatformShape> | undefined;
 
-/**
- * Loads établissements from the platform's dedicated Firestore project, migrating any pre-existing
- * local platform.json into it on the very first boot after switching. Must resolve before any other
- * export in this module is called — server.ts awaits it before starting to listen.
- */
+/** Loads the établissements list from MongoDB. Must resolve before any other export in this module is
+ * called — server.ts awaits it before starting to listen. */
 export async function initPlatformStore(): Promise<void> {
-  store = await PlatformDocStore.create<PlatformShape>('establishments', () => {
-    if (!fs.existsSync(PLATFORM_PATH)) return { etablissements: [] };
-    const raw = JSON.parse(fs.readFileSync(PLATFORM_PATH, 'utf-8')) as PlatformShape & { restaurants?: EtablissementMeta[] };
-    return raw.etablissements ? raw : { etablissements: raw.restaurants ?? [] };
-  });
-  if (fs.existsSync(PLATFORM_PATH)) {
-    fs.renameSync(PLATFORM_PATH, `${PLATFORM_PATH}.migrated`);
-  }
+  store = await PlatformDocStore.create<PlatformShape>('establishments', () => ({ etablissements: [] }));
 }
 
 function load(): PlatformShape {
@@ -320,18 +304,6 @@ export const platform = {
       throw new Error(`Établissement not found: ${id}`);
     }
     meta.adminEmail = adminEmail?.trim() || undefined;
-    save(data);
-    return meta;
-  },
-
-  setStorageBackend(id: string, backend: StorageBackend): EtablissementMeta {
-    const data = load();
-    const normalized = id.trim().toUpperCase();
-    const meta = data.etablissements.find((r) => r.id === normalized);
-    if (!meta) {
-      throw new Error(`Établissement not found: ${id}`);
-    }
-    meta.storageBackend = backend;
     save(data);
     return meta;
   },
